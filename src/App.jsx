@@ -23,6 +23,25 @@ const SUBJECTS = [
 ];
 const KOREAN_OPT = [{code:"언매",name:"언어와 매체"},{code:"화작",name:"화법과 작문"}];
 const MATH_OPT   = [{code:"확통",name:"확률과 통계"},{code:"기하",name:"기하"},{code:"미적",name:"미적분"}];
+// Teacher input mode tabs (common + selection ranges)
+const KOREAN_INPUT_TABS = [
+  {code:"common", name:"공통", range:[1,34]},
+  {code:"언매", name:"언매", range:[35,45]},
+  {code:"화작", name:"화작", range:[35,45]}
+];
+const MATH_INPUT_TABS = [
+  {code:"common", name:"공통", range:[1,22]},
+  {code:"확통", name:"확통", range:[23,30]},
+  {code:"기하", name:"기하", range:[23,30]},
+  {code:"미적", name:"미적", range:[23,30]}
+];
+function getInputRange(subId, mode){
+  if(subId==="korean") return mode==="common"?[1,34]:[35,45];
+  if(subId==="math")   return mode==="common"?[1,22]:[23,30];
+  if(subId==="english") return [1,45];
+  if(subId==="tangu1"||subId==="tangu2") return [1,20];
+  return [1,1];
+}
 const MATH_SHORT_ANSWER = [16,17,18,19,20,21,22,29,30];
 
 const DEFAULT_PW   = "2580";
@@ -38,8 +57,8 @@ const emptyAbsent  = ()=>({korean:false,math:false,english:false,tangu1:false,ta
 const emptyDL      = ()=>SUBJECTS.reduce((o,s)=>({...o,[s.id]:{deadline:"",closed:false}}),{});
 // Nested structure for answer key (per-selection)
 const emptyKey     = ()=>({
-  korean: {언매:{}, 화작:{}},
-  math:   {확통:{}, 기하:{}, 미적:{}},
+  korean: {common:{}, 언매:{}, 화작:{}},
+  math:   {common:{}, 확통:{}, 기하:{}, 미적:{}},
   english: {},
   tangu:  TANGU_SUBJECTS.reduce((o,s)=>({...o,[s.code]:{}}),{})
 });
@@ -84,12 +103,34 @@ function defaultQScore(subId){
   if(!sub) return 2;
   return Math.round(sub.fullScore/sub.count);
 }
-// Get the answer key sub-object for a given subject + student's selection
+// Get raw slot only (no merge) - for teacher input view
+function getRawKey(keyRoot, subId, slot){
+  if(!keyRoot) return {};
+  if(subId==="english") return keyRoot.english || {};
+  if(subId==="korean"||subId==="math") return (keyRoot[subId] && keyRoot[subId][slot]) || {};
+  if(subId==="tangu1"||subId==="tangu2") return (keyRoot.tangu && keyRoot.tangu[slot]) || {};
+  return {};
+}
+// Get merged key for grading. Smart fallback: if common has entries for 1..N use them;
+// otherwise fall back to selection's 1..N (legacy V4 data compatibility).
 function getKeyFor(keyRoot, subId, selection){
   if(!keyRoot) return {};
   if(subId==="english") return keyRoot.english || {};
-  if(subId==="korean"||subId==="math") return (keyRoot[subId] && keyRoot[subId][selection]) || {};
   if(subId==="tangu1"||subId==="tangu2") return (keyRoot.tangu && keyRoot.tangu[selection]) || {};
+  if(subId==="korean"||subId==="math"){
+    const root = keyRoot[subId] || {};
+    const common = root.common || {};
+    const select = (selection && root[selection]) || {};
+    const commonMax = subId==="korean" ? 34 : 22;
+    // Start with selection (provides 35-45 or 23-30, AND legacy 1..commonMax fallback)
+    const merged = {...select};
+    // Overlay common for 1..commonMax (common takes priority when present)
+    Object.keys(common).forEach(k=>{
+      const n = parseInt(k,10);
+      if(n>=1 && n<=commonMax && common[k]!=null) merged[k] = common[k];
+    });
+    return merged;
+  }
   return {};
 }
 function getScoresFor(scoresRoot, subId, selection){
@@ -1516,20 +1557,19 @@ function TeacherDashboard({students,deadlines,answerKey,answerScores,
   );
 }
 
-// ── Teacher Key Input (selection toggle + per-question scores) ────────────
+// ── Teacher Key Input (common + selection split, V4 backward-compatible) ──
 function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,onDone}){
   const [activeSubject,setActiveSubject]=useState("korean");
-  const [activeSel,setActiveSel]=useState({korean:"언매",math:"확통",tangu:"생윤"});
+  const [activeSel,setActiveSel]=useState({korean:"common",math:"common",tangu:"생윤"});
 
-  const getSelOptions=(subId)=>{
-    if(subId==="korean") return KOREAN_OPT;
-    if(subId==="math") return MATH_OPT;
-    if(subId==="tangu1"||subId==="tangu2") return TANGU_SUBJECTS;
+  const getInputTabs=(subId)=>{
+    if(subId==="korean") return KOREAN_INPUT_TABS;
+    if(subId==="math")   return MATH_INPUT_TABS;
     return null;
   };
   const getCurSel=()=>{
     if(activeSubject==="korean") return activeSel.korean;
-    if(activeSubject==="math") return activeSel.math;
+    if(activeSubject==="math")   return activeSel.math;
     if(activeSubject==="tangu1"||activeSubject==="tangu2") return activeSel.tangu;
     return null;
   };
@@ -1540,24 +1580,53 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
   };
   const curSel=getCurSel();
   const cur=SUBJECTS.find(s=>s.id===activeSubject);
+  const [rangeStart, rangeEnd] = getInputRange(activeSubject, curSel);
+  const rangeCount = rangeEnd - rangeStart + 1;
 
-  const curAnswers=getKeyFor(answerKey, activeSubject, curSel);
-  const curScores=getKeyFor(answerScores, activeSubject, curSel);
+  // Raw slot (no merge) for teacher input
+  const curAnswers=getRawKey(answerKey, activeSubject, curSel);
+  const curScores=getRawKey(answerScores, activeSubject, curSel);
 
-  const countAnswered=(subId, selection)=>{
-    return Object.values(getKeyFor(answerKey, subId, selection)).filter(v=>v!=null).length;
+  // Count answered within a slot's range (only the relevant range, ignoring legacy out-of-range)
+  const countInRange=(subId, slot)=>{
+    const raw = getRawKey(answerKey, subId, slot);
+    const [rs, re] = getInputRange(subId, slot);
+    let n = 0;
+    for(let i=rs;i<=re;i++) if(raw[i]!=null) n++;
+    return n;
   };
-  const totalAns=countAnswered(activeSubject, curSel);
 
-  const curScoreTotal=(()=>{
-    if(!cur) return 0;
+  const curRangeScoreTotal=(()=>{
     let total=0;
-    for(let i=1;i<=cur.count;i++){
+    for(let i=rangeStart;i<=rangeEnd;i++){
       const sc=curScores[i];
       total += (sc!=null && sc!=="") ? Number(sc) : defaultQScore(activeSubject);
     }
     return total;
   })();
+
+  // Subject total = common (with selection fallback) + selection's selection-range
+  const calcSubjectTotal=(subId, selectionCode)=>{
+    if(subId==="english") return curRangeScoreTotal;
+    const commonScores = getRawKey(answerScores, subId, "common");
+    const selScores = getRawKey(answerScores, subId, selectionCode);
+    let total=0;
+    const def=defaultQScore(subId);
+    const [cs,ce] = getInputRange(subId,"common");
+    const [ss,se] = getInputRange(subId,selectionCode);
+    // common range: prefer common slot, fallback to selection (legacy)
+    for(let i=cs;i<=ce;i++){
+      let sc = commonScores[i];
+      if(sc==null || sc==="") sc = selScores[i];
+      total += (sc!=null && sc!=="") ? Number(sc) : def;
+    }
+    // selection range: use selection slot
+    for(let i=ss;i<=se;i++){
+      const sc=selScores[i];
+      total += (sc!=null && sc!=="") ? Number(sc) : def;
+    }
+    return total;
+  };
 
   const handleAnsSelect=(qNum,val)=>{
     setAnswerKey(prev=>{
@@ -1614,7 +1683,8 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
     });
   };
 
-  const selOptions=getSelOptions(activeSubject);
+  const inputTabs = getInputTabs(activeSubject);
+  const cols = rangeCount >= 26 ? 3 : rangeCount >= 8 ? 2 : 1;
 
   return(
     <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
@@ -1627,7 +1697,7 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
               <div style={{fontSize:"10px",color:"#c8a8e8",letterSpacing:".12em",fontWeight:"600",marginBottom:"1px"}}>
                 교사 전용 · 정답·배점 입력
               </div>
-              <h1 style={{margin:0,fontSize:"17px",fontWeight:"800",color:"#fff"}}>🔑 선택과목별 정답·배점 입력</h1>
+              <h1 style={{margin:0,fontSize:"17px",fontWeight:"800",color:"#fff"}}>🔑 공통·선택 분리 정답 입력</h1>
             </div>
             <button onClick={handleSave} style={{padding:"8px 18px",
               background:"linear-gradient(135deg,#fcd34d,#f59e0b)",color:"#1a1a00",
@@ -1654,101 +1724,140 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
           </div>
         </div>
       </div>
+
       <div style={{maxWidth:"920px",margin:"0 auto",padding:"16px 14px"}}>
         <div style={{background:"linear-gradient(90deg,#3b1a6b,#5b2a9b)",borderRadius:"12px",
           padding:"10px 16px",marginBottom:"12px",color:"#fff",fontSize:"12px",
           display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
           <span>🔑</span>
           <span style={{flex:1}}>
-            {activeSubject==="english"
-              ? "영어는 선택과목이 없습니다. 정답과 배점만 입력하세요."
-              : "선택과목을 먼저 고른 후 정답·배점을 입력하세요. 학생이 선택한 과목에 맞게 자동 채점됩니다."}
+            {activeSubject==="english" && "영어 1~45번 정답·배점을 입력하세요."}
+            {activeSubject==="korean" && "공통(1~34) 한 번 + 언매(35~45) + 화작(35~45) 따로 입력하세요. 기존 데이터도 자동으로 채점됩니다."}
+            {activeSubject==="math" && "공통(1~22, 단답 16~22) 한 번 + 확통/기하/미적(23~30, 단답 29~30) 따로 입력하세요."}
+            {(activeSubject==="tangu1"||activeSubject==="tangu2") && "탐구는 17개 과목 중 학생이 선택한 과목만 입력하시면 됩니다. (탐구①·② 공용)"}
           </span>
         </div>
 
-        {selOptions && (
+        {/* Common/Selection Tabs for Korean/Math */}
+        {inputTabs && (
           <div style={{background:"#fff",borderRadius:"12px",padding:"12px 16px",marginBottom:"12px",
             boxShadow:"0 2px 10px rgba(0,0,0,.06)"}}>
-            <div style={{fontSize:"12px",fontWeight:"700",color:"#666",marginBottom:"8px"}}>
-              {activeSubject==="korean"?"국어 선택과목":
-                activeSubject==="math"?"수학 선택과목":
-                "탐구 과목 (탐구① · 탐구② 공통)"}
+            <div style={{fontSize:"11px",fontWeight:"700",color:"#666",marginBottom:"8px"}}>
+              📌 입력 영역 선택
             </div>
-            {(activeSubject==="korean"||activeSubject==="math") ? (
-              <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
-                {selOptions.map(opt=>{
-                  const isSel = curSel===opt.code;
-                  const cnt = countAnswered(activeSubject, opt.code);
-                  return(
-                    <button key={opt.code} onClick={()=>setCurSel(opt.code)}
-                      style={{padding:"6px 14px",borderRadius:"8px",
-                        border:isSel?`2px solid ${cur.color}`:"1.5px solid #ccc",
-                        background:isSel?cur.color:"#fff",color:isSel?"#fff":"#666",
-                        fontSize:"12px",fontWeight:"700",cursor:"pointer",
-                        fontFamily:"'Noto Sans KR',sans-serif",
-                        display:"flex",alignItems:"center",gap:"6px"}}>
-                      <span>{opt.code} · {opt.name}</span>
-                      <span style={{fontSize:"10px",opacity:.85,
-                        background:isSel?"rgba(255,255,255,.2)":"#f0f0f0",
-                        padding:"1px 6px",borderRadius:"4px"}}>
-                        {cnt}/{cur.count}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{display:"flex",gap:"10px",alignItems:"center",flexWrap:"wrap"}}>
-                <select value={curSel||""} onChange={e=>setCurSel(e.target.value)}
-                  style={{padding:"7px 14px",borderRadius:"8px",border:`2px solid ${cur.color}`,
-                    background:"#fff",fontSize:"13px",fontWeight:"700",
-                    fontFamily:"'Noto Sans KR',sans-serif",cursor:"pointer",
-                    outline:"none",color:cur.color,minWidth:"200px"}}>
-                  {selOptions.map(s=>{
-                    const cnt = countAnswered(activeSubject, s.code);
-                    const has = cnt>0?` ✓ ${cnt}/${cur.count}`:"";
-                    return <option key={s.code} value={s.code}>{s.code} · {s.name}{has}</option>;
-                  })}
-                </select>
-                <span style={{fontSize:"11px",color:"#888",fontWeight:"600"}}>
-                  ✓ 표시는 정답이 입력된 과목입니다
-                </span>
-              </div>
-            )}
+            <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+              {inputTabs.map(opt=>{
+                const isSel = curSel===opt.code;
+                const cnt = countInRange(activeSubject, opt.code);
+                const [rs, re] = opt.range;
+                const total = re - rs + 1;
+                const isCommon = opt.code === "common";
+                const chipColor = isCommon ? "#475569" : cur.color;
+                return(
+                  <button key={opt.code} onClick={()=>setCurSel(opt.code)}
+                    style={{padding:"8px 14px",borderRadius:"9px",
+                      border:isSel?`2px solid ${chipColor}`:"1.5px solid #d0d0d0",
+                      background:isSel?chipColor:"#fff",
+                      color:isSel?"#fff":"#666",
+                      fontSize:"12px",fontWeight:"700",cursor:"pointer",
+                      fontFamily:"'Noto Sans KR',sans-serif",
+                      display:"flex",alignItems:"center",gap:"6px"}}>
+                    <span>{isCommon?"📘 공통":opt.name}</span>
+                    <span style={{fontSize:"10px",fontWeight:"600",opacity:.75}}>{rs}-{re}</span>
+                    <span style={{fontSize:"10px",fontWeight:"700",
+                      background:isSel?"rgba(255,255,255,.22)":(cnt===total?"#dcfce7":"#f0f0f0"),
+                      color:isSel?"#fff":(cnt===total?"#16a34a":"#888"),
+                      padding:"2px 7px",borderRadius:"5px"}}>
+                      {cnt}/{total}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 
+        {/* Tangu dropdown */}
+        {(activeSubject==="tangu1"||activeSubject==="tangu2") && (
+          <div style={{background:"#fff",borderRadius:"12px",padding:"12px 16px",marginBottom:"12px",
+            boxShadow:"0 2px 10px rgba(0,0,0,.06)"}}>
+            <div style={{fontSize:"11px",fontWeight:"700",color:"#666",marginBottom:"8px"}}>
+              📌 탐구 과목 선택 (탐구①·② 공용)
+            </div>
+            <div style={{display:"flex",gap:"10px",alignItems:"center",flexWrap:"wrap"}}>
+              <select value={curSel||""} onChange={e=>setCurSel(e.target.value)}
+                style={{padding:"7px 14px",borderRadius:"8px",border:`2px solid ${cur.color}`,
+                  background:"#fff",fontSize:"13px",fontWeight:"700",
+                  fontFamily:"'Noto Sans KR',sans-serif",cursor:"pointer",
+                  outline:"none",color:cur.color,minWidth:"200px"}}>
+                {TANGU_SUBJECTS.map(s=>{
+                  const cnt = countInRange("tangu1", s.code);
+                  const has = cnt>0?` ✓ ${cnt}/20`:"";
+                  return <option key={s.code} value={s.code}>{s.code} · {s.name}{has}</option>;
+                })}
+              </select>
+              <span style={{fontSize:"11px",color:"#888",fontWeight:"600"}}>
+                ✓ 표시는 정답이 입력된 과목입니다
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Main OMR Grid */}
         <div style={{background:"#fff",borderRadius:"16px",padding:"20px",
           boxShadow:"0 2px 16px rgba(0,0,0,.08)",borderTop:`4px solid ${cur.color}`}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px",flexWrap:"wrap",gap:"8px"}}>
-            <h2 style={{margin:0,fontSize:"18px",fontWeight:"800",color:cur.color}}>
-              {cur.label}{curSel?` (${curSel})`:""} 정답·배점
-              <span style={{fontSize:"12px",fontWeight:"600",color:"#aaa",marginLeft:"8px"}}>
-                {totalAns}/{cur.count} 입력
-              </span>
-            </h2>
-            <div style={{display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
-              <div style={{padding:"6px 14px",borderRadius:"8px",
-                background: curScoreTotal===cur.fullScore?"#f0fff4":curScoreTotal>cur.fullScore?"#fff0f0":"#fff8e8",
-                border: curScoreTotal===cur.fullScore?"1.5px solid #86efac":curScoreTotal>cur.fullScore?"1.5px solid #fca5a5":"1.5px solid #f0c060",
-                fontSize:"12px",fontWeight:"800",
-                color: curScoreTotal===cur.fullScore?"#16a34a":curScoreTotal>cur.fullScore?"#dc2626":"#7a5000"}}>
-                배점합계: {curScoreTotal} / {cur.fullScore}점
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"14px",flexWrap:"wrap",gap:"8px"}}>
+            <div>
+              <h2 style={{margin:"0 0 4px",fontSize:"18px",fontWeight:"800",color:cur.color}}>
+                {cur.label}
+                {curSel === "common" && <span style={{color:"#475569"}}> · 공통</span>}
+                {curSel && curSel !== "common" && ` · ${curSel}`}
+                <span style={{fontSize:"12px",fontWeight:"600",color:"#aaa",marginLeft:"8px"}}>
+                  {rangeStart}-{rangeEnd}번 ({rangeCount}문항)
+                </span>
+              </h2>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+              <div style={{padding:"6px 12px",borderRadius:"8px",
+                background:"#f0f4ff",border:"1.5px solid #d0daf0",
+                fontSize:"11px",fontWeight:"700",color:"#475569"}}>
+                이 영역 배점: {curRangeScoreTotal}점
               </div>
+              {(activeSubject==="korean"||activeSubject==="math") && (() => {
+                const selOptions = activeSubject==="korean"?["언매","화작"]:["확통","기하","미적"];
+                return selOptions.map(selOpt=>{
+                  const total = calcSubjectTotal(activeSubject, selOpt);
+                  const ok = total === cur.fullScore;
+                  const over = total > cur.fullScore;
+                  return (
+                    <div key={selOpt} style={{padding:"6px 12px",borderRadius:"8px",
+                      background: ok?"#f0fff4":over?"#fff0f0":"#fff8e8",
+                      border: ok?"1.5px solid #86efac":over?"1.5px solid #fca5a5":"1.5px solid #f0c060",
+                      fontSize:"11px",fontWeight:"800",
+                      color: ok?"#16a34a":over?"#dc2626":"#7a5000"}}>
+                      공통+{selOpt}: {total}/{cur.fullScore}
+                      {ok && " ✓"}
+                    </div>
+                  );
+                });
+              })()}
               <button onClick={resetScores}
-                style={{padding:"5px 12px",background:"#f5f5f5",color:"#666",border:"none",
-                  borderRadius:"7px",fontSize:"11px",fontWeight:"600",cursor:"pointer",
-                  fontFamily:"'Noto Sans KR',sans-serif"}}>배점 초기화</button>
+                style={{padding:"5px 10px",background:"#f5f5f5",color:"#666",border:"none",
+                  borderRadius:"6px",fontSize:"11px",fontWeight:"600",cursor:"pointer",
+                  fontFamily:"'Noto Sans KR',sans-serif"}}>이 영역 배점 초기화</button>
             </div>
           </div>
           <OMRGrid count={cur.count} answers={curAnswers}
             onSelect={handleAnsSelect}
-            color={cur.color} columns={cur.count===20?2:3}
+            color={cur.color}
+            columns={cols}
             shortAnswers={activeSubject==="math"?MATH_SHORT_ANSWER:[]}
             scoreMode={true}
             scoresMap={curScores}
             onScoreChange={handleScoreChange}
-            subjectId={activeSubject}/>
+            subjectId={activeSubject}
+            startQ={rangeStart}
+            endQ={rangeEnd}/>
         </div>
         <div style={{display:"flex",justifyContent:"flex-end",marginTop:"12px"}}>
           <button onClick={handleSave} style={{padding:"9px 22px",
