@@ -27,8 +27,8 @@ const MATH_SHORT_ANSWER = [16,17,18,19,20,21,22,29,30];
 
 const DEFAULT_PW   = "2580";
 const SK_STUDENTS  = "omr_students_v3";
-const SK_KEY       = "omr_answer_key_v3";
-const SK_SCORES    = "omr_scores_v1";
+const SK_KEY       = "omr_answer_key_v4";
+const SK_SCORES    = "omr_scores_v2";
 const SK_PW        = "omr_teacher_pw_v2";
 const SK_DEADLINES = "omr_deadlines_v1";
 
@@ -36,7 +36,14 @@ const emptyAnswers = ()=>({korean:{},math:{},english:{},tangu1:{},tangu2:{}});
 const emptySel     = ()=>({korean:null,math:null,tangu1:null,tangu2:null});
 const emptyAbsent  = ()=>({korean:false,math:false,english:false,tangu1:false,tangu2:false});
 const emptyDL      = ()=>SUBJECTS.reduce((o,s)=>({...o,[s.id]:{deadline:"",closed:false}}),{});
-const emptyScores  = ()=>({korean:{},math:{},english:{},tangu1:{},tangu2:{}});
+// Nested structure for answer key (per-selection)
+const emptyKey     = ()=>({
+  korean: {언매:{}, 화작:{}},
+  math:   {확통:{}, 기하:{}, 미적:{}},
+  english: {},
+  tangu:  TANGU_SUBJECTS.reduce((o,s)=>({...o,[s.code]:{}}),{})
+});
+const emptyScores  = ()=>emptyKey();
 
 // ── Storage (Firebase Firestore) ───────────────────────────────────────────
 async function stGet(key) {
@@ -77,6 +84,18 @@ function defaultQScore(subId){
   if(!sub) return 2;
   return Math.round(sub.fullScore/sub.count);
 }
+// Get the answer key sub-object for a given subject + student's selection
+function getKeyFor(keyRoot, subId, selection){
+  if(!keyRoot) return {};
+  if(subId==="english") return keyRoot.english || {};
+  if(subId==="korean"||subId==="math") return (keyRoot[subId] && keyRoot[subId][selection]) || {};
+  if(subId==="tangu1"||subId==="tangu2") return (keyRoot.tangu && keyRoot.tangu[selection]) || {};
+  return {};
+}
+function getScoresFor(scoresRoot, subId, selection){
+  return getKeyFor(scoresRoot, subId, selection);
+}
+
 function getQScore(subId, qNum, scoresMap){
   const stored=scoresMap?.[subId]?.[qNum];
   if(stored!=null && stored!=="") return Number(stored);
@@ -95,12 +114,18 @@ function calculateScores(student, answerKey, answerScores){
       result[sub.id]={status:"absent",raw:null,correct:0,keyed:0};
       continue;
     }
+    const subKey=getKeyFor(answerKey, sub.id, rec.selection);
+    const subScores=getScoresFor(answerScores, sub.id, rec.selection);
     let raw=0, correct=0, keyed=0;
     for(let i=1;i<=sub.count;i++){
-      const keyAns=answerKey?.[sub.id]?.[i];
+      const keyAns=subKey[i];
       if(keyAns==null) continue;
       keyed++;
-      if(rec.answers?.[i]===keyAns){ correct++; raw+=getQScore(sub.id,i,answerScores); }
+      if(rec.answers?.[i]===keyAns){
+        correct++;
+        const sc = subScores[i];
+        raw += (sc!=null && sc!=="") ? Number(sc) : defaultQScore(sub.id);
+      }
     }
     result[sub.id]={status:"submitted",raw:Math.round(raw*10)/10,correct,keyed};
     total+=raw;
@@ -1255,32 +1280,91 @@ function TeacherDashboard({students,deadlines,answerKey,answerScores,
   );
 }
 
-// ── Teacher Key Input (with score input) ──────────────────────────────────
+// ── Teacher Key Input (with selection toggle + score input) ───────────────
 function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,onDone}){
   const [activeSubject,setActiveSubject]=useState("korean");
+  const [activeSel,setActiveSel]=useState({korean:"언매",math:"확통",tangu:"생윤"});
+
+  // Selection options per subject
+  const getSelOptions=(subId)=>{
+    if(subId==="korean") return KOREAN_OPT;
+    if(subId==="math") return MATH_OPT;
+    if(subId==="tangu1"||subId==="tangu2") return TANGU_SUBJECTS;
+    return null;
+  };
+  const getCurSel=()=>{
+    if(activeSubject==="korean") return activeSel.korean;
+    if(activeSubject==="math") return activeSel.math;
+    if(activeSubject==="tangu1"||activeSubject==="tangu2") return activeSel.tangu;
+    return null;
+  };
+  const setCurSel=(v)=>{
+    if(activeSubject==="korean") setActiveSel(p=>({...p,korean:v}));
+    else if(activeSubject==="math") setActiveSel(p=>({...p,math:v}));
+    else if(activeSubject==="tangu1"||activeSubject==="tangu2") setActiveSel(p=>({...p,tangu:v}));
+  };
+  const curSel=getCurSel();
   const cur=SUBJECTS.find(s=>s.id===activeSubject);
 
-  const getAnswered=(id)=>Object.values(answerKey[id]||{}).filter(v=>v!=null).length;
-  const totalAns=SUBJECTS.reduce((s,sub)=>s+getAnswered(sub.id),0);
-  const totalQ=SUBJECTS.reduce((s,sub)=>s+sub.count,0);
+  // Get current answers/scores for the selected variant
+  const curAnswers=getKeyFor(answerKey, activeSubject, curSel);
+  const curScores=getScoresFor(answerScores, activeSubject, curSel);
 
-  // Calculate current total score for active subject
-  const getCurrentTotalScore=(subId)=>{
-    const sub=SUBJECTS.find(s=>s.id===subId);
-    if(!sub) return 0;
+  // Count answered for given (subId, selection)
+  const countAnswered=(subId, selection)=>{
+    return Object.values(getKeyFor(answerKey, subId, selection)).filter(v=>v!=null).length;
+  };
+
+  // Total entered for the current view
+  const totalAns=countAnswered(activeSubject, curSel);
+
+  // Calculate current total score for active subject+selection
+  const curScoreTotal=(()=>{
+    if(!cur) return 0;
     let total=0;
-    for(let i=1;i<=sub.count;i++){
-      total+=getQScore(subId,i,answerScores);
+    for(let i=1;i<=cur.count;i++){
+      const sc=curScores[i];
+      total += (sc!=null && sc!=="") ? Number(sc) : defaultQScore(activeSubject);
     }
     return total;
-  };
-  const curScoreTotal=getCurrentTotalScore(activeSubject);
+  })();
 
   const handleAnsSelect=(qNum,val)=>{
-    setAnswerKey(prev=>({...prev,[activeSubject]:{...prev[activeSubject],[qNum]:val}}));
+    setAnswerKey(prev=>{
+      const next={...prev};
+      if(activeSubject==="english"){
+        next.english={...(prev.english||{}),[qNum]:val};
+      } else if(activeSubject==="korean"){
+        next.korean={...(prev.korean||{}),
+          [curSel]:{...((prev.korean&&prev.korean[curSel])||{}),[qNum]:val}};
+      } else if(activeSubject==="math"){
+        next.math={...(prev.math||{}),
+          [curSel]:{...((prev.math&&prev.math[curSel])||{}),[qNum]:val}};
+      } else if(activeSubject==="tangu1"||activeSubject==="tangu2"){
+        next.tangu={...(prev.tangu||{}),
+          [curSel]:{...((prev.tangu&&prev.tangu[curSel])||{}),[qNum]:val}};
+      }
+      return next;
+    });
   };
+
   const handleScoreChange=(qNum,val)=>{
-    setAnswerScores(prev=>({...prev,[activeSubject]:{...(prev[activeSubject]||{}),[qNum]:val}}));
+    setAnswerScores(prev=>{
+      const next={...prev};
+      if(activeSubject==="english"){
+        next.english={...(prev.english||{}),[qNum]:val};
+      } else if(activeSubject==="korean"){
+        next.korean={...(prev.korean||{}),
+          [curSel]:{...((prev.korean&&prev.korean[curSel])||{}),[qNum]:val}};
+      } else if(activeSubject==="math"){
+        next.math={...(prev.math||{}),
+          [curSel]:{...((prev.math&&prev.math[curSel])||{}),[qNum]:val}};
+      } else if(activeSubject==="tangu1"||activeSubject==="tangu2"){
+        next.tangu={...(prev.tangu||{}),
+          [curSel]:{...((prev.tangu&&prev.tangu[curSel])||{}),[qNum]:val}};
+      }
+      return next;
+    });
   };
 
   const handleSave=async()=>{
@@ -1289,10 +1373,28 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
     onDone();
   };
 
-  // Quick set all scores in current subject to default
   const resetScores=()=>{
-    setAnswerScores(prev=>({...prev,[activeSubject]:{}}));
+    setAnswerScores(prev=>{
+      const next={...prev};
+      if(activeSubject==="english") next.english={};
+      else if(activeSubject==="korean") next.korean={...(prev.korean||{}),[curSel]:{}};
+      else if(activeSubject==="math") next.math={...(prev.math||{}),[curSel]:{}};
+      else if(activeSubject==="tangu1"||activeSubject==="tangu2") next.tangu={...(prev.tangu||{}),[curSel]:{}};
+      return next;
+    });
   };
+
+  // Header total count (sum across all selections)
+  const totalAnsGlobal=(()=>{
+    let total=0;
+    for(const opt of KOREAN_OPT) total += countAnswered("korean", opt.code);
+    for(const opt of MATH_OPT)   total += countAnswered("math", opt.code);
+    total += Object.values(answerKey.english||{}).filter(v=>v!=null).length;
+    for(const t of TANGU_SUBJECTS) total += countAnswered("tangu1", t.code);
+    return total;
+  })();
+
+  const selOptions=getSelOptions(activeSubject);
 
   return(
     <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
@@ -1305,12 +1407,9 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
               <div style={{fontSize:"10px",color:"#c8a8e8",letterSpacing:".12em",fontWeight:"600",marginBottom:"1px"}}>
                 교사 전용 · 정답·배점 입력
               </div>
-              <h1 style={{margin:0,fontSize:"17px",fontWeight:"800",color:"#fff"}}>🔑 정답·배점 입력 모드</h1>
+              <h1 style={{margin:0,fontSize:"17px",fontWeight:"800",color:"#fff"}}>🔑 선택과목별 정답·배점 입력</h1>
             </div>
             <div style={{display:"flex",gap:"7px",alignItems:"center"}}>
-              <span style={{fontSize:"12px",color:"#c8a8e8",fontWeight:"600",alignSelf:"center"}}>
-                정답 {totalAns}/{totalQ}
-              </span>
               <button onClick={handleSave} style={{padding:"8px 18px",
                 background:"linear-gradient(135deg,#fcd34d,#f59e0b)",color:"#1a1a00",
                 border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"800",cursor:"pointer",
@@ -1319,9 +1418,10 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
             </div>
           </div>
           <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
-            {SUBJECTS.map(sub=>{
-              const ans=getAnswered(sub.id);
-              const isActive=activeSubject===sub.id;
+            {SUBJECTS.filter(s=>s.id!=="tangu2").map(sub=>{
+              const isActive=activeSubject===sub.id || (sub.id==="tangu1" && activeSubject==="tangu2");
+              // Tangu1 tab represents both tangu1 and tangu2 since key is shared
+              const displayLabel = sub.id==="tangu1" ? "탐구" : sub.label;
               return(
                 <button key={sub.id} onClick={()=>setActiveSubject(sub.id)} style={{
                   padding:"6px 11px",borderRadius:"7px",
@@ -1329,12 +1429,8 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
                   background:isActive?"#fff":"rgba(255,255,255,.1)",
                   color:isActive?sub.color:"#ccc",
                   fontSize:"12px",fontWeight:"700",cursor:"pointer",
-                  fontFamily:"'Noto Sans KR',sans-serif",display:"flex",alignItems:"center",gap:"4px"}}>
-                  {sub.label}
-                  <span style={{fontSize:"10px",padding:"1px 4px",borderRadius:"4px",
-                    background:isActive?`${sub.color}22`:"rgba(255,255,255,.15)"}}>
-                    {ans}/{sub.count}
-                  </span>
+                  fontFamily:"'Noto Sans KR',sans-serif"}}>
+                  {displayLabel}
                 </button>
               );
             })}
@@ -1346,13 +1442,75 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
           padding:"10px 16px",marginBottom:"12px",color:"#fff",fontSize:"12px",
           display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
           <span>🔑</span>
-          <span style={{flex:1}}>각 문항의 <strong>정답 번호</strong>와 <strong>배점</strong>을 입력하세요. 배점 미입력시 기본값({defaultQScore(activeSubject)}점)이 적용됩니다.</span>
+          <span style={{flex:1}}>
+            {activeSubject==="english"
+              ? "영어는 선택과목이 없습니다. 정답과 배점만 입력하세요."
+              : "선택과목을 먼저 고른 후 정답·배점을 입력하세요. 학생이 선택한 과목에 맞게 자동 채점됩니다."}
+          </span>
         </div>
+
+        {/* Selection chooser */}
+        {selOptions && (
+          <div style={{background:"#fff",borderRadius:"12px",padding:"12px 16px",marginBottom:"12px",
+            boxShadow:"0 2px 10px rgba(0,0,0,.06)"}}>
+            <div style={{fontSize:"12px",fontWeight:"700",color:"#666",marginBottom:"8px"}}>
+              {activeSubject==="korean"?"국어 선택과목":
+                activeSubject==="math"?"수학 선택과목":
+                "탐구 과목 (탐구① · 탐구② 공통)"}
+            </div>
+            {(activeSubject==="korean"||activeSubject==="math") ? (
+              <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                {selOptions.map(opt=>{
+                  const isSel = curSel===opt.code;
+                  const cnt = countAnswered(activeSubject, opt.code);
+                  return(
+                    <button key={opt.code} onClick={()=>setCurSel(opt.code)}
+                      style={{padding:"6px 14px",borderRadius:"8px",
+                        border:isSel?`2px solid ${cur.color}`:"1.5px solid #ccc",
+                        background:isSel?cur.color:"#fff",color:isSel?"#fff":"#666",
+                        fontSize:"12px",fontWeight:"700",cursor:"pointer",
+                        fontFamily:"'Noto Sans KR',sans-serif",
+                        display:"flex",alignItems:"center",gap:"6px"}}>
+                      <span>{opt.code} · {opt.name}</span>
+                      <span style={{fontSize:"10px",opacity:.85,
+                        background:isSel?"rgba(255,255,255,.2)":"#f0f0f0",
+                        padding:"1px 6px",borderRadius:"4px"}}>
+                        {cnt}/{cur.count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{display:"flex",gap:"10px",alignItems:"center",flexWrap:"wrap"}}>
+                <select value={curSel||""} onChange={e=>setCurSel(e.target.value)}
+                  style={{padding:"7px 14px",borderRadius:"8px",border:`2px solid ${cur.color}`,
+                    background:"#fff",fontSize:"13px",fontWeight:"700",
+                    fontFamily:"'Noto Sans KR',sans-serif",cursor:"pointer",
+                    outline:"none",color:cur.color,minWidth:"200px"}}>
+                  {selOptions.map(s=>{
+                    const cnt = countAnswered(activeSubject, s.code);
+                    const has = cnt>0?` ✓ ${cnt}/${cur.count}`:"";
+                    return <option key={s.code} value={s.code}>{s.code} · {s.name}{has}</option>;
+                  })}
+                </select>
+                <span style={{fontSize:"11px",color:"#888",fontWeight:"600"}}>
+                  ✓ 표시는 정답이 입력된 과목입니다
+                </span>
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{background:"#fff",borderRadius:"16px",padding:"20px",
           boxShadow:"0 2px 16px rgba(0,0,0,.08)",borderTop:`4px solid ${cur.color}`}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px",flexWrap:"wrap",gap:"8px"}}>
-            <h2 style={{margin:0,fontSize:"18px",fontWeight:"800",color:cur.color}}>{cur.label} 정답·배점</h2>
+            <h2 style={{margin:0,fontSize:"18px",fontWeight:"800",color:cur.color}}>
+              {cur.label}{curSel?` (${curSel})`:""} 정답·배점
+              <span style={{fontSize:"12px",fontWeight:"600",color:"#aaa",marginLeft:"8px"}}>
+                {totalAns}/{cur.count} 입력
+              </span>
+            </h2>
             <div style={{display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
               <div style={{padding:"6px 14px",borderRadius:"8px",
                 background: curScoreTotal===cur.fullScore?"#f0fff4":curScoreTotal>cur.fullScore?"#fff0f0":"#fff8e8",
@@ -1367,31 +1525,16 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
                   fontFamily:"'Noto Sans KR',sans-serif"}}>배점 초기화</button>
             </div>
           </div>
-          <OMRGrid count={cur.count} answers={answerKey[activeSubject]}
+          <OMRGrid count={cur.count} answers={curAnswers}
             onSelect={handleAnsSelect}
             color={cur.color} columns={cur.count===20?2:3}
             shortAnswers={activeSubject==="math"?MATH_SHORT_ANSWER:[]}
             scoreMode={true}
-            scoresMap={answerScores[activeSubject]||{}}
+            scoresMap={curScores}
             onScoreChange={handleScoreChange}
             subjectId={activeSubject}/>
         </div>
-
-        <div style={{display:"flex",justifyContent:"space-between",marginTop:"12px",gap:"8px"}}>
-          <div style={{display:"flex",gap:"7px"}}>
-            {SUBJECTS.findIndex(s=>s.id===activeSubject)>0&&(
-              <button onClick={()=>{const i=SUBJECTS.findIndex(s=>s.id===activeSubject);setActiveSubject(SUBJECTS[i-1].id);}}
-                style={{padding:"9px 16px",background:"#fff",border:"1.5px solid #ddd",borderRadius:"9px",
-                  fontSize:"12px",fontWeight:"600",color:"#666",cursor:"pointer",
-                  fontFamily:"'Noto Sans KR',sans-serif"}}>← 이전</button>
-            )}
-            {SUBJECTS.findIndex(s=>s.id===activeSubject)<SUBJECTS.length-1&&(
-              <button onClick={()=>{const i=SUBJECTS.findIndex(s=>s.id===activeSubject);setActiveSubject(SUBJECTS[i+1].id);}}
-                style={{padding:"9px 16px",background:"#fff",border:"1.5px solid #ddd",borderRadius:"9px",
-                  fontSize:"12px",fontWeight:"600",color:"#666",cursor:"pointer",
-                  fontFamily:"'Noto Sans KR',sans-serif"}}>다음 →</button>
-            )}
-          </div>
+        <div style={{display:"flex",justifyContent:"flex-end",marginTop:"12px"}}>
           <button onClick={handleSave} style={{padding:"9px 22px",
             background:"linear-gradient(135deg,#3b1a6b,#5b2a9b)",color:"#fff",
             border:"none",borderRadius:"9px",fontSize:"12px",fontWeight:"700",cursor:"pointer",
@@ -1500,7 +1643,8 @@ function GradingScreen({student,answerKey,answerScores,onBack}){
             <OMRGrid count={det.count}
               answers={student.subjects[det.id]?.answers||{}}
               color={det.color} columns={det.count===20?2:3}
-              answerKey={answerKey[det.id]||{}} showResult={true}
+              answerKey={getKeyFor(answerKey, det.id, student.subjects[det.id]?.selection)}
+              showResult={true}
               shortAnswers={det.id==="math"?MATH_SHORT_ANSWER:[]}/>
           </div>
         )}
@@ -1514,7 +1658,7 @@ export default function App(){
   const [screen,setScreen]=useState("student");
   const [storedPw,setStoredPw]=useState(null);
   const [students,setStudents]=useState([]);
-  const [answerKey,setAnswerKey]=useState(emptyAnswers());
+  const [answerKey,setAnswerKey]=useState(emptyKey());
   const [answerScores,setAnswerScores]=useState(emptyScores());
   const [deadlines,setDeadlines]=useState(emptyDL());
   const [gradingTarget,setGradingTarget]=useState(null);
@@ -1529,8 +1673,8 @@ export default function App(){
       const dl=await stGet(SK_DEADLINES);
       if(pw) setStoredPw(pw);
       if(stu) setStudents(stu);
-      if(key) setAnswerKey(key.answers||emptyAnswers());
-      if(scr) setAnswerScores({...emptyScores(),...scr});
+      if(key) setAnswerKey(key.answers||emptyKey());
+      if(scr) setAnswerScores(scr);
       if(dl)  setDeadlines({...emptyDL(),...dl});
       setLoading(false);
     })();
