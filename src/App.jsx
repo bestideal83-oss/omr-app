@@ -264,12 +264,17 @@ function ShortAnswerRow({num,value,onSelect,color,keyVal,showResult,disabled,sco
 
 // ── OMRGrid ────────────────────────────────────────────────────────────────
 function OMRGrid({count,answers,onSelect,color,columns=3,answerKey={},showResult=false,disabled=false,
-  shortAnswers=[],scoreMode=false,scoresMap={},onScoreChange,subjectId}){
-  const perCol=Math.ceil(count/columns);
+  shortAnswers=[],scoreMode=false,scoresMap={},onScoreChange,subjectId,startQ,endQ}){
+  const realStart = startQ != null ? startQ : 1;
+  const realEnd = endQ != null ? endQ : count;
+  const totalQ = realEnd - realStart + 1;
+  const perCol = Math.ceil(totalQ/columns);
   return(
     <div style={{display:"flex",gap:"7px",flexWrap:"wrap"}}>
       {Array.from({length:columns},(_,c)=>{
-        const s=c*perCol+1,e=Math.min(s+perCol-1,count);
+        const s=realStart+c*perCol;
+        const e=Math.min(s+perCol-1, realEnd);
+        if (s > realEnd) return null;
         return(
           <div key={c} style={{display:"flex",flexDirection:"column",gap:"1px",
             background:"#f5f5f7",borderRadius:"10px",padding:"8px 3px",flex:1}}>
@@ -966,11 +971,32 @@ function DeadlinePanel({deadlines,students,onUpdate}){
 // ── Class Scores Panel ─────────────────────────────────────────────────────
 function ClassScoresPanel({students, answerKey, answerScores}){
   const hasKey=Object.values(answerKey||{}).some(a=>a&&Object.keys(a).length>0);
+  const [sortMode,setSortMode]=useState("default");  // default | numAsc | numDesc | nameAsc | totalDesc | totalAsc
 
-  const allScores=students.map(stu=>({
+  // Build scored list
+  const allScoresUnsorted=students.map(stu=>({
     student:stu,
     scores:calculateScores(stu, answerKey, answerScores)
   }));
+
+  // Sort
+  const compareNum=(a,b)=>{
+    const an=String(a||""); const bn=String(b||"");
+    const ai=parseFloat(an); const bi=parseFloat(bn);
+    const aIsNum=!isNaN(ai)&&isFinite(ai);
+    const bIsNum=!isNaN(bi)&&isFinite(bi);
+    if(aIsNum&&bIsNum) return ai-bi;
+    if(aIsNum) return -1;
+    if(bIsNum) return 1;
+    return an.localeCompare(bn,"ko");
+  };
+  const allScores=[...allScoresUnsorted];
+  if(sortMode==="numAsc")  allScores.sort((a,b)=>compareNum(a.student.num, b.student.num));
+  else if(sortMode==="numDesc") allScores.sort((a,b)=>compareNum(b.student.num, a.student.num));
+  else if(sortMode==="nameAsc") allScores.sort((a,b)=>(a.student.name||"").localeCompare(b.student.name||"","ko"));
+  else if(sortMode==="totalDesc") allScores.sort((a,b)=>(b.scores._total||0)-(a.scores._total||0));
+  else if(sortMode==="totalAsc")  allScores.sort((a,b)=>(a.scores._total||0)-(b.scores._total||0));
+
 
   const handleDownload=()=>{
     const today=new Date();
@@ -981,6 +1007,7 @@ function ClassScoresPanel({students, answerKey, answerScores}){
       "국어","국어선택","수학","수학선택","영어",
       "탐구①","탐구①과목","탐구②","탐구②과목","총점","제출일시"];
     const rows=[headers];
+    // Download uses currently-sorted list
     allScores.forEach((row,i)=>{
       const s=row.scores;
       const stu=row.student;
@@ -1019,7 +1046,22 @@ function ClassScoresPanel({students, answerKey, answerScores}){
         <h2 style={{margin:0,fontSize:"16px",fontWeight:"800",color:"#1a1a2e"}}>
           📊 학급 전체 점수 <span style={{fontSize:"12px",color:"#aaa",fontWeight:"600"}}>({students.length}명)</span>
         </h2>
-        <div style={{display:"flex",gap:"7px",alignItems:"center"}}>
+        <div style={{display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap"}}>
+          {/* Sort dropdown */}
+          <div style={{display:"flex",alignItems:"center",gap:"5px"}}>
+            <span style={{fontSize:"11px",color:"#666",fontWeight:"600"}}>정렬:</span>
+            <select value={sortMode} onChange={e=>setSortMode(e.target.value)}
+              style={{padding:"5px 10px",border:"1.5px solid #d0d0d0",borderRadius:"7px",
+                fontSize:"11px",fontWeight:"600",fontFamily:"'Noto Sans KR',sans-serif",
+                cursor:"pointer",outline:"none",background:"#fff",color:"#444"}}>
+              <option value="default">기본 (제출순)</option>
+              <option value="numAsc">수험번호 ↑</option>
+              <option value="numDesc">수험번호 ↓</option>
+              <option value="nameAsc">이름 (가나다)</option>
+              <option value="totalDesc">총점 ↓</option>
+              <option value="totalAsc">총점 ↑</option>
+            </select>
+          </div>
           {!hasKey && (
             <div style={{fontSize:"11px",color:"#dc2626",fontWeight:"600",padding:"4px 10px",
               background:"#fff0f0",borderRadius:"6px"}}>⚠ 정답 미입력</div>
@@ -1109,12 +1151,181 @@ function ClassScoresPanel({students, answerKey, answerScores}){
   );
 }
 
+// ── Selection Edit Modal (manually set student's selections) ──────────────
+function SelectionEditModal({student, onSave, onCancel}){
+  const [sel,setSel]=useState({
+    korean: (student.subjects?.korean?.selection)||"",
+    math:   (student.subjects?.math?.selection)||"",
+    tangu1: (student.subjects?.tangu1?.selection)||"",
+    tangu2: (student.subjects?.tangu2?.selection)||"",
+  });
+  const [saving,setSaving]=useState(false);
+
+  const submittedSubjects = SUBJECTS.filter(s=>student.subjects?.[s.id]?.submittedAt);
+  if(submittedSubjects.length===0){
+    return null;
+  }
+
+  const handleSave=async()=>{
+    setSaving(true);
+    try{
+      const students=(await stGet(SK_STUDENTS))||[];
+      const idx=students.findIndex(s=>s && s.name===student.name && (s.num||"")===(student.num||""));
+      if(idx>=0){
+        const updated={...students[idx]};
+        updated.subjects={...(updated.subjects||{})};
+        // Update selection for each subject that was submitted
+        if(updated.subjects.korean && sel.korean) updated.subjects.korean={...updated.subjects.korean, selection:sel.korean};
+        if(updated.subjects.math && sel.math) updated.subjects.math={...updated.subjects.math, selection:sel.math};
+        if(updated.subjects.tangu1 && sel.tangu1) updated.subjects.tangu1={...updated.subjects.tangu1, selection:sel.tangu1};
+        if(updated.subjects.tangu2 && sel.tangu2) updated.subjects.tangu2={...updated.subjects.tangu2, selection:sel.tangu2};
+        students[idx]=updated;
+        await stSet(SK_STUDENTS, students);
+        onSave();
+      }
+    } catch(e){
+      console.error("Save selection error:", e);
+    } finally{
+      setSaving(false);
+    }
+  };
+
+  const hasSubj=(id)=>!!student.subjects?.[id]?.submittedAt;
+  const isAbsent=(id)=>!!student.subjects?.[id]?.absent;
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",
+      alignItems:"center",justifyContent:"center",zIndex:999,padding:"20px"}}>
+      <div style={{background:"#fff",borderRadius:"18px",padding:"28px",maxWidth:"460px",
+        width:"100%",boxShadow:"0 24px 80px rgba(0,0,0,.35)",
+        maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"18px"}}>
+          <div>
+            <div style={{fontSize:"11px",color:"#888",fontWeight:"600",marginBottom:"2px"}}>선택과목 수동 설정</div>
+            <h2 style={{margin:0,fontSize:"18px",fontWeight:"800",color:"#1a1a2e"}}>
+              {student.name||"(이름없음)"}{student.num&&` · ${student.num}`}
+            </h2>
+          </div>
+          <button onClick={onCancel} style={{padding:"4px 10px",background:"none",border:"none",
+            color:"#999",fontSize:"20px",cursor:"pointer",lineHeight:1}}>×</button>
+        </div>
+
+        <div style={{fontSize:"11px",color:"#666",marginBottom:"16px",padding:"10px 12px",
+          background:"#fff8e8",borderRadius:"8px",border:"1px solid #f0d8a0"}}>
+          💡 학생이 마킹하지 않은 선택과목을 교사가 수동으로 입력할 수 있습니다.
+          (제출된 과목만 표시됩니다)
+        </div>
+
+        {/* 국어 */}
+        {hasSubj("korean") && !isAbsent("korean") && (
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"12px",fontWeight:"700",color:"#1a4a8a",marginBottom:"6px"}}>
+              📘 국어 선택과목
+              {!student.subjects.korean.selection && <span style={{color:"#dc2626",marginLeft:"6px"}}>(미입력)</span>}
+            </div>
+            <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+              {KOREAN_OPT.map(o=>{
+                const isSel=sel.korean===o.code;
+                return <button key={o.code} onClick={()=>setSel(p=>({...p,korean:isSel?"":o.code}))}
+                  style={{padding:"6px 14px",borderRadius:"7px",
+                    border:isSel?"2px solid #1a4a8a":"1.5px solid #ccc",
+                    background:isSel?"#1a4a8a":"#fff",color:isSel?"#fff":"#666",
+                    fontSize:"12px",fontWeight:"600",cursor:"pointer",
+                    fontFamily:"'Noto Sans KR',sans-serif"}}>
+                  {o.code} {o.name}
+                </button>;
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 수학 */}
+        {hasSubj("math") && !isAbsent("math") && (
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"12px",fontWeight:"700",color:"#7b2d8b",marginBottom:"6px"}}>
+              📐 수학 선택과목
+              {!student.subjects.math.selection && <span style={{color:"#dc2626",marginLeft:"6px"}}>(미입력)</span>}
+            </div>
+            <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+              {MATH_OPT.map(o=>{
+                const isSel=sel.math===o.code;
+                return <button key={o.code} onClick={()=>setSel(p=>({...p,math:isSel?"":o.code}))}
+                  style={{padding:"6px 14px",borderRadius:"7px",
+                    border:isSel?"2px solid #7b2d8b":"1.5px solid #ccc",
+                    background:isSel?"#7b2d8b":"#fff",color:isSel?"#fff":"#666",
+                    fontSize:"12px",fontWeight:"600",cursor:"pointer",
+                    fontFamily:"'Noto Sans KR',sans-serif"}}>
+                  {o.code} {o.name}
+                </button>;
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 탐구1 */}
+        {hasSubj("tangu1") && !isAbsent("tangu1") && (
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"12px",fontWeight:"700",color:"#b5500a",marginBottom:"6px"}}>
+              🔬 탐구① 과목
+              {!student.subjects.tangu1.selection && <span style={{color:"#dc2626",marginLeft:"6px"}}>(미입력)</span>}
+            </div>
+            <select value={sel.tangu1} onChange={e=>setSel(p=>({...p,tangu1:e.target.value}))}
+              style={{padding:"7px 12px",borderRadius:"7px",border:"1.5px solid #d0a060",
+                background:"#fff",fontSize:"13px",fontWeight:"600",
+                fontFamily:"'Noto Sans KR',sans-serif",cursor:"pointer",
+                outline:"none",width:"100%"}}>
+              <option value="">선택안함</option>
+              {TANGU_SUBJECTS.filter(s=>s.code!==sel.tangu2).map(s=>(
+                <option key={s.code} value={s.code}>{s.code} · {s.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* 탐구2 */}
+        {hasSubj("tangu2") && !isAbsent("tangu2") && (
+          <div style={{marginBottom:"14px"}}>
+            <div style={{fontSize:"12px",fontWeight:"700",color:"#8a1a2e",marginBottom:"6px"}}>
+              🔬 탐구② 과목
+              {!student.subjects.tangu2.selection && <span style={{color:"#dc2626",marginLeft:"6px"}}>(미입력)</span>}
+            </div>
+            <select value={sel.tangu2} onChange={e=>setSel(p=>({...p,tangu2:e.target.value}))}
+              style={{padding:"7px 12px",borderRadius:"7px",border:"1.5px solid #d0a060",
+                background:"#fff",fontSize:"13px",fontWeight:"600",
+                fontFamily:"'Noto Sans KR',sans-serif",cursor:"pointer",
+                outline:"none",width:"100%"}}>
+              <option value="">선택안함</option>
+              {TANGU_SUBJECTS.filter(s=>s.code!==sel.tangu1).map(s=>(
+                <option key={s.code} value={s.code}>{s.code} · {s.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:"7px",marginTop:"20px"}}>
+          <button onClick={onCancel} style={{flex:1,padding:"11px",background:"#f5f5f5",
+            color:"#666",border:"none",borderRadius:"9px",fontSize:"13px",fontWeight:"700",
+            cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>취소</button>
+          <button onClick={handleSave} disabled={saving} style={{flex:2,padding:"11px",
+            background:"linear-gradient(135deg,#0f1f3d,#1a3a6b)",color:"#fff",
+            border:"none",borderRadius:"9px",fontSize:"13px",fontWeight:"700",
+            cursor:saving?"default":"pointer",fontFamily:"'Noto Sans KR',sans-serif",
+            opacity:saving?0.7:1}}>
+            {saving?"저장 중...":"💾 저장"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Teacher Dashboard ──────────────────────────────────────────────────────
 function TeacherDashboard({students,deadlines,answerKey,answerScores,
-  onUpdateDeadlines,onEditKey,onGrade,onLogout,onChangePw,onClearAll}){
+  onUpdateDeadlines,onEditKey,onGrade,onLogout,onChangePw,onClearAll,onRefreshStudents}){
   const [changePw,setChangePw]=useState(false);
   const [pw1,setPw1]=useState(""); const [pw2,setPw2]=useState(""); const [pwErr,setPwErr]=useState("");
   const [confirmClear,setConfirmClear]=useState(false);
+  const [editingStudent,setEditingStudent]=useState(null);
 
   const handleChangePw=()=>{
     if(pw1.length<4){setPwErr("4자리 이상 입력하세요");return;}
@@ -1229,9 +1440,17 @@ function TeacherDashboard({students,deadlines,answerKey,answerScores,
             </div>
           ):(
             <div style={{display:"flex",flexDirection:"column",gap:"7px"}}>
-              {students.map((stu,i)=>(
-                <div key={stu.key||i} style={{padding:"12px 16px",background:"#f8f9ff",
-                  borderRadius:"10px",border:"1px solid #e8eaf0",
+              {students.map((stu,i)=>{
+                // Check if any submitted subject has missing selection
+                const missingSel=SUBJECTS.some(s=>{
+                  if(s.id==="english") return false;
+                  const r=stu.subjects?.[s.id];
+                  return r && r.submittedAt && !r.absent && !r.selection;
+                });
+                return(
+                <div key={stu.key||i} style={{padding:"12px 16px",
+                  background: missingSel?"#fff8e8":"#f8f9ff",
+                  borderRadius:"10px",border: missingSel?"1.5px solid #f0c060":"1px solid #e8eaf0",
                   display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
                   <div style={{width:"26px",height:"26px",borderRadius:"50%",flexShrink:0,
                     background:"linear-gradient(135deg,#1a4a8a,#7b2d8b)",
@@ -1262,6 +1481,17 @@ function TeacherDashboard({students,deadlines,answerKey,answerScores,
                       );
                     })}
                   </div>
+                  {SUBJECTS.some(s=>stu.subjects?.[s.id]?.submittedAt) && (
+                    <button onClick={()=>setEditingStudent(stu)} style={{
+                      padding:"7px 12px",
+                      background: missingSel?"#f0c060":"#fff",
+                      color: missingSel?"#fff":"#7a5000",
+                      border: missingSel?"none":"1.5px solid #f0c060",
+                      borderRadius:"8px",fontSize:"11px",
+                      fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif",
+                      whiteSpace:"nowrap"}}>
+                      📝 선택과목 {missingSel?"입력 필요":"수정"}</button>
+                  )}
                   {hasKey&&SUBJECTS.some(s=>stu.subjects?.[s.id]?.submittedAt)&&(
                     <button onClick={()=>onGrade(stu)} style={{
                       padding:"7px 14px",background:"linear-gradient(135deg,#0f1f3d,#1a3a6b)",
@@ -1271,21 +1501,26 @@ function TeacherDashboard({students,deadlines,answerKey,answerScores,
                       📊 상세 채점</button>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
       </div>
+      {editingStudent && (
+        <SelectionEditModal student={editingStudent}
+          onSave={()=>{ setEditingStudent(null); onRefreshStudents&&onRefreshStudents(); }}
+          onCancel={()=>setEditingStudent(null)}/>
+      )}
     </div>
   );
 }
 
-// ── Teacher Key Input (with selection toggle + score input) ───────────────
+// ── Teacher Key Input (selection toggle + per-question scores) ────────────
 function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,onDone}){
   const [activeSubject,setActiveSubject]=useState("korean");
   const [activeSel,setActiveSel]=useState({korean:"언매",math:"확통",tangu:"생윤"});
 
-  // Selection options per subject
   const getSelOptions=(subId)=>{
     if(subId==="korean") return KOREAN_OPT;
     if(subId==="math") return MATH_OPT;
@@ -1306,19 +1541,14 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
   const curSel=getCurSel();
   const cur=SUBJECTS.find(s=>s.id===activeSubject);
 
-  // Get current answers/scores for the selected variant
   const curAnswers=getKeyFor(answerKey, activeSubject, curSel);
-  const curScores=getScoresFor(answerScores, activeSubject, curSel);
+  const curScores=getKeyFor(answerScores, activeSubject, curSel);
 
-  // Count answered for given (subId, selection)
   const countAnswered=(subId, selection)=>{
     return Object.values(getKeyFor(answerKey, subId, selection)).filter(v=>v!=null).length;
   };
-
-  // Total entered for the current view
   const totalAns=countAnswered(activeSubject, curSel);
 
-  // Calculate current total score for active subject+selection
   const curScoreTotal=(()=>{
     if(!cur) return 0;
     let total=0;
@@ -1384,16 +1614,6 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
     });
   };
 
-  // Header total count (sum across all selections)
-  const totalAnsGlobal=(()=>{
-    let total=0;
-    for(const opt of KOREAN_OPT) total += countAnswered("korean", opt.code);
-    for(const opt of MATH_OPT)   total += countAnswered("math", opt.code);
-    total += Object.values(answerKey.english||{}).filter(v=>v!=null).length;
-    for(const t of TANGU_SUBJECTS) total += countAnswered("tangu1", t.code);
-    return total;
-  })();
-
   const selOptions=getSelOptions(activeSubject);
 
   return(
@@ -1409,18 +1629,15 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
               </div>
               <h1 style={{margin:0,fontSize:"17px",fontWeight:"800",color:"#fff"}}>🔑 선택과목별 정답·배점 입력</h1>
             </div>
-            <div style={{display:"flex",gap:"7px",alignItems:"center"}}>
-              <button onClick={handleSave} style={{padding:"8px 18px",
-                background:"linear-gradient(135deg,#fcd34d,#f59e0b)",color:"#1a1a00",
-                border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"800",cursor:"pointer",
-                fontFamily:"'Noto Sans KR',sans-serif",boxShadow:"0 2px 10px rgba(245,158,11,.4)"}}>
-                💾 저장 후 대시보드</button>
-            </div>
+            <button onClick={handleSave} style={{padding:"8px 18px",
+              background:"linear-gradient(135deg,#fcd34d,#f59e0b)",color:"#1a1a00",
+              border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"800",cursor:"pointer",
+              fontFamily:"'Noto Sans KR',sans-serif",boxShadow:"0 2px 10px rgba(245,158,11,.4)"}}>
+              💾 저장 후 대시보드</button>
           </div>
           <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
             {SUBJECTS.filter(s=>s.id!=="tangu2").map(sub=>{
-              const isActive=activeSubject===sub.id || (sub.id==="tangu1" && activeSubject==="tangu2");
-              // Tangu1 tab represents both tangu1 and tangu2 since key is shared
+              const isActive=activeSubject===sub.id;
               const displayLabel = sub.id==="tangu1" ? "탐구" : sub.label;
               return(
                 <button key={sub.id} onClick={()=>setActiveSubject(sub.id)} style={{
@@ -1449,7 +1666,6 @@ function TeacherKeyInput({answerKey,setAnswerKey,answerScores,setAnswerScores,on
           </span>
         </div>
 
-        {/* Selection chooser */}
         {selOptions && (
           <div style={{background:"#fff",borderRadius:"12px",padding:"12px 16px",marginBottom:"12px",
             boxShadow:"0 2px 10px rgba(0,0,0,.06)"}}>
@@ -1725,7 +1941,8 @@ export default function App(){
       onGrade={handleGrade}
       onLogout={()=>setScreen("student")}
       onChangePw={handleChangePw}
-      onClearAll={handleClearAll}/>
+      onClearAll={handleClearAll}
+      onRefreshStudents={refreshStudents}/>
   );
   if(screen==="teacher_key") return(
     <TeacherKeyInput answerKey={answerKey} setAnswerKey={setAnswerKey}
