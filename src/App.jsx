@@ -604,7 +604,7 @@ function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines, silmoData, 
           <button onClick={onTeacherLogin} style={{width:"100%",marginTop:"10px",padding:"11px",
             background:"transparent",color:"#999",border:"1.5px solid #ddd",
             borderRadius:"10px",fontSize:"12px",fontWeight:"600",cursor:"pointer",
-            fontFamily:"'Noto Sans KR',sans-serif"}}>← 시작화면으로</button>
+            fontFamily:"'Noto Sans KR',sans-serif"}}>← 이전 화면</button>
         </div>
       </div>
     );
@@ -655,7 +655,7 @@ function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines, silmoData, 
               background:"rgba(255,255,255,.08)",color:"#bbb",
               border:"1.5px solid rgba(255,255,255,.15)",borderRadius:"7px",
               fontSize:"11px",fontWeight:"600",cursor:"pointer",
-              fontFamily:"'Noto Sans KR',sans-serif"}}>← 처음으로</button>
+              fontFamily:"'Noto Sans KR',sans-serif"}}>← 시작화면</button>
           </div>
           <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
             {SUBJECTS.map(sub => {
