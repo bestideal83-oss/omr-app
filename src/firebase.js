@@ -5,7 +5,7 @@
 // 가이드: https://console.firebase.google.com → 프로젝트 설정 → 일반 → 내 앱 → 웹 앱 → SDK 구성
 
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore } from "firebase/firestore/lite";
 
 const firebaseConfig = {
   apiKey: "YOUR_API_KEY_HERE",
