@@ -50,6 +50,23 @@ const SK_KEY       = "omr_answer_key_v4";
 const SK_SCORES    = "omr_scores_v2";
 const SK_PW        = "omr_teacher_pw_v2";
 const SK_DEADLINES = "omr_deadlines_v1";
+const SK_SILMO     = "omr_silmo_data_v1";
+
+// Silmo (과목별 실모) subjects
+const SILMO_SUBJECTS = [
+  {code:"korean",  name:"국어", count:45, fullScore:100, color:"#1a4a8a", active:false},
+  {code:"math",    name:"수학", count:30, fullScore:100, color:"#7b2d8b", active:false},
+  {code:"english", name:"영어", count:45, fullScore:100, color:"#0f5c8a", active:false},
+  {code:"gtam",    name:"과탐", count:20, fullScore:50,  color:"#0a6b3b", active:false},
+  {code:"stam",    name:"사탐", count:20, fullScore:50,  color:"#b5500a", active:true}
+];
+function genSilmoId(){ return Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,8); }
+function emptySilmo(){
+  return {
+    rounds: SILMO_SUBJECTS.reduce((o,s)=>({...o,[s.code]:[]}),{}),
+    submissions: {}
+  };
+}
 
 const emptyAnswers = ()=>({korean:{},math:{},english:{},tangu1:{},tangu2:{}});
 const emptySel     = ()=>({korean:null,math:null,tangu1:null,tangu2:null});
@@ -384,10 +401,11 @@ function PasswordModal({onSuccess,onCancel,storedPw}){
 }
 
 // ── Student View ───────────────────────────────────────────────────────────
-function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines}) {
+function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines, silmoData, setSilmoData}) {
   const [name, setName] = useState("");
   const [num, setNum] = useState("");
   const [identified, setIdentified] = useState(false);
+  const [examMode, setExamMode] = useState(null);  // null | "regular" | "silmo"
   const [nameErr, setNameErr] = useState(false);
   const [errMsg, setErrMsg] = useState("");
 
@@ -517,6 +535,30 @@ function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines}) {
 
   const totalDone = SUBJECTS.filter(s => submitted[s.id]).length;
   const allSubmitted = totalDone === SUBJECTS.length;
+
+  // ── Mode Select (after login, before exam) ──
+  if (!examMode) {
+    return (
+      <ModeSelect
+        role="student"
+        title={`반갑습니다, ${name.trim()} 학생`}
+        subtitle="응시할 시험 버전을 선택하세요"
+        onRegular={()=>setExamMode("regular")}
+        onSilmo={()=>setExamMode("silmo")}
+        onLogout={()=>{ setIdentified(false); setExamMode(null); }}/>
+    );
+  }
+
+  // ── Silmo Flow ──
+  if (examMode === "silmo") {
+    return (
+      <SilmoStudentFlow
+        studentInfo={{name: name.trim(), num: num.trim()}}
+        silmoData={silmoData}
+        setSilmoData={setSilmoData}
+        onExit={()=>setExamMode(null)}/>
+    );
+  }
 
   // ── Grading Screen for Student ──
   if (showGrading && gradingKey) {
@@ -1979,6 +2021,987 @@ function GradingScreen({student,answerKey,answerScores,onBack}){
 }
 
 // ── Root App ───────────────────────────────────────────────────────────────
+// ── ModeSelect: choose 정기모고 vs 과목별실모 ─────────────────────────────
+function ModeSelect({title, subtitle, role, onRegular, onSilmo, onLogout}){
+  return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0a1828,#1a2540)",
+      fontFamily:"'Noto Sans KR',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+      <div style={{maxWidth:"560px",width:"100%"}}>
+        <div style={{textAlign:"center",marginBottom:"30px"}}>
+          <div style={{fontSize:"11px",color:"#88a2c8",letterSpacing:".18em",fontWeight:"700",marginBottom:"6px"}}>
+            {role==="teacher"?"교사 전용":"학생 응시"}
+          </div>
+          <h1 style={{margin:"0 0 6px",fontSize:"22px",fontWeight:"800",color:"#fff",letterSpacing:".5px"}}>
+            {title||"버전 선택"}
+          </h1>
+          <div style={{fontSize:"12px",color:"#a8b8d0"}}>{subtitle||"응시할 시험 버전을 선택하세요"}</div>
+        </div>
+        <div style={{display:"grid",gap:"14px"}}>
+          <button onClick={onRegular} style={{padding:"22px 24px",borderRadius:"14px",
+            background:"linear-gradient(135deg,#3b1a6b,#5b2a9b)",color:"#fff",border:"none",
+            cursor:"pointer",textAlign:"left",fontFamily:"'Noto Sans KR',sans-serif",
+            boxShadow:"0 6px 24px rgba(59,26,107,.35)"}}>
+            <div style={{fontSize:"22px",marginBottom:"4px"}}>📝</div>
+            <div style={{fontSize:"17px",fontWeight:"800",marginBottom:"3px"}}>정기 모의고사</div>
+            <div style={{fontSize:"11px",opacity:.85,fontWeight:"500"}}>
+              국어·수학·영어·탐구① ②  통합 OMR (수능 풀버전)
+            </div>
+          </button>
+          <button onClick={onSilmo} style={{padding:"22px 24px",borderRadius:"14px",
+            background:"linear-gradient(135deg,#0a6b3b,#16a34a)",color:"#fff",border:"none",
+            cursor:"pointer",textAlign:"left",fontFamily:"'Noto Sans KR',sans-serif",
+            boxShadow:"0 6px 24px rgba(10,107,59,.35)"}}>
+            <div style={{fontSize:"22px",marginBottom:"4px"}}>📚</div>
+            <div style={{fontSize:"17px",fontWeight:"800",marginBottom:"3px"}}>과목별 실모</div>
+            <div style={{fontSize:"11px",opacity:.85,fontWeight:"500"}}>
+              과목별 실전 모의 회차별 응시 (현재 사탐 운영중)
+            </div>
+          </button>
+        </div>
+        {onLogout && (
+          <div style={{textAlign:"center",marginTop:"20px"}}>
+            <button onClick={onLogout} style={{padding:"6px 14px",background:"transparent",
+              color:"#88a2c8",border:"1px solid rgba(136,162,200,.3)",borderRadius:"7px",
+              fontSize:"11px",fontWeight:"600",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>
+              ← 로그아웃
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Silmo Student Flow ────────────────────────────────────────────────────
+function SilmoStudentFlow({studentInfo, silmoData, setSilmoData, onExit}){
+  const [step,setStep]=useState("subject");
+  const [subject,setSubject]=useState(null);
+  const [activeRound,setActiveRound]=useState(null);
+  const [lastSubmission,setLastSubmission]=useState(null);
+
+  const goSubject=()=>{ setStep("subject"); setSubject(null); setActiveRound(null); };
+  const pickSubject=(code)=>{ setSubject(code); setStep("rounds"); };
+  const pickRound=(r)=>{ setActiveRound(r); setStep("exam"); };
+
+  const handleSubmit=async(answers, absent)=>{
+    const subKey=(activeRound.answerKey)||{};
+    const subScores=(activeRound.scores)||{};
+    let raw=0, correct=0;
+    const keyed=Object.values(subKey).filter(v=>v!=null).length;
+    if(!absent){
+      for(let i=1;i<=20;i++){
+        const ka=subKey[i];
+        if(ka==null) continue;
+        if(answers[i]===ka){
+          correct++;
+          const sc=subScores[i];
+          raw += (sc!=null && sc!=="") ? Number(sc) : 2.5;
+        }
+      }
+    }
+    const sub={
+      name: studentInfo.name, num: studentInfo.num,
+      answers, absent: !!absent,
+      submittedAt: new Date().toISOString(),
+      raw: Math.round(raw*10)/10, correct, keyed
+    };
+    const newData=JSON.parse(JSON.stringify(silmoData));
+    if(!newData.submissions[activeRound.id]) newData.submissions[activeRound.id]=[];
+    newData.submissions[activeRound.id]=newData.submissions[activeRound.id]
+      .filter(s=>!(s.name===sub.name && (s.num||"")===(sub.num||"")));
+    newData.submissions[activeRound.id].push(sub);
+    await stSet(SK_SILMO, newData);
+    setSilmoData(newData);
+    setLastSubmission(sub);
+    setStep("grading");
+  };
+
+  if(step==="subject") return <SilmoSubjectView student={studentInfo} role="student"
+    onPick={pickSubject} onExit={onExit}/>;
+  if(step==="rounds") return <SilmoRoundsView subject={subject} silmoData={silmoData}
+    student={studentInfo} onPickRound={pickRound} onBack={goSubject}/>;
+  if(step==="exam") return <SilmoExamView round={activeRound} subject={subject}
+    student={studentInfo} onSubmit={handleSubmit} onBack={()=>setStep("rounds")}/>;
+  if(step==="grading") return <SilmoGradingView round={activeRound} subject={subject}
+    submission={lastSubmission} onBack={()=>setStep("rounds")} onExit={onExit}/>;
+  return null;
+}
+
+function SilmoSubjectView({student, role, onPick, onExit}){
+  return(
+    <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
+      <div style={{background:"linear-gradient(135deg,#0a6b3b,#16a34a)",padding:"14px 18px",
+        boxShadow:"0 2px 16px rgba(0,0,0,.2)"}}>
+        <div style={{maxWidth:"720px",margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"7px"}}>
+          <div>
+            <div style={{fontSize:"10px",color:"#c8f7d8",letterSpacing:".12em",fontWeight:"700",marginBottom:"2px"}}>과목별 실모</div>
+            <h1 style={{margin:0,fontSize:"17px",fontWeight:"800",color:"#fff"}}>📚 과목 선택</h1>
+          </div>
+          <div style={{display:"flex",gap:"7px",alignItems:"center"}}>
+            {student && <span style={{color:"#fff",fontSize:"12px",fontWeight:"600"}}>{student.name}{student.num?` · ${student.num}`:""}</span>}
+            <button onClick={onExit} style={{padding:"6px 12px",background:"rgba(255,255,255,.15)",
+              color:"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",
+              cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>← 처음으로</button>
+          </div>
+        </div>
+      </div>
+      <div style={{maxWidth:"720px",margin:"0 auto",padding:"24px 14px"}}>
+        <div style={{fontSize:"12px",color:"#666",textAlign:"center",marginBottom:"18px"}}>
+          현재 <strong style={{color:"#b5500a"}}>사탐</strong>만 운영 중입니다.
+        </div>
+        <div style={{display:"grid",gap:"10px",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))"}}>
+          {SILMO_SUBJECTS.map(s=>(
+            <button key={s.code} onClick={()=>onPick(s.code)}
+              style={{padding:"22px 14px",borderRadius:"14px",
+                background:s.active?"#fff":"#f5f5f5",
+                color:s.active?s.color:"#aaa",
+                border:s.active?`2px solid ${s.color}`:"2px solid #ddd",
+                cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif",
+                boxShadow:s.active?"0 4px 14px rgba(0,0,0,.08)":"none",
+                opacity:s.active?1:.65,position:"relative"}}>
+              <div style={{fontSize:"24px",marginBottom:"6px"}}>{s.code==="stam"?"🌏":s.code==="gtam"?"🔬":s.code==="english"?"🌐":s.code==="math"?"📐":"📖"}</div>
+              <div style={{fontSize:"15px",fontWeight:"800"}}>{s.name}</div>
+              {!s.active && <div style={{fontSize:"10px",marginTop:"4px",color:"#999",fontWeight:"600"}}>준비중</div>}
+              {s.active && <div style={{fontSize:"10px",marginTop:"4px",color:"#16a34a",fontWeight:"700"}}>● 운영중</div>}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SilmoRoundsView({subject, silmoData, student, onPickRound, onBack}){
+  const sub=SILMO_SUBJECTS.find(s=>s.code===subject);
+  const rounds=(silmoData.rounds[subject])||[];
+  const sortedRounds=[...rounds].sort((a,b)=>(b.num||0)-(a.num||0));
+
+  const findMySubmission=(roundId)=>{
+    const subs=silmoData.submissions[roundId]||[];
+    return subs.find(s=>s.name===student.name && (s.num||"")===(student.num||""));
+  };
+
+  if(!sub) return null;
+
+  if(!sub.active){
+    return(
+      <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
+        <div style={{background:sub.color,padding:"14px 18px",boxShadow:"0 2px 16px rgba(0,0,0,.2)"}}>
+          <div style={{maxWidth:"720px",margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <h1 style={{margin:0,fontSize:"17px",fontWeight:"800",color:"#fff"}}>{sub.name}</h1>
+            <button onClick={onBack} style={{padding:"6px 12px",background:"rgba(255,255,255,.18)",
+              color:"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",cursor:"pointer",
+              fontFamily:"'Noto Sans KR',sans-serif"}}>← 과목선택</button>
+          </div>
+        </div>
+        <div style={{maxWidth:"720px",margin:"40px auto",padding:"40px 20px",textAlign:"center"}}>
+          <div style={{fontSize:"40px",marginBottom:"14px"}}>🚧</div>
+          <h2 style={{margin:0,fontSize:"18px",fontWeight:"800",color:"#666"}}>{sub.name} 실모는 준비 중입니다</h2>
+          <div style={{fontSize:"12px",color:"#888",marginTop:"8px"}}>곧 운영을 시작합니다</div>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
+      <div style={{background:sub.color,padding:"14px 18px",boxShadow:"0 2px 16px rgba(0,0,0,.2)"}}>
+        <div style={{maxWidth:"720px",margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"7px"}}>
+          <div>
+            <div style={{fontSize:"10px",color:"rgba(255,255,255,.7)",letterSpacing:".12em",fontWeight:"700",marginBottom:"2px"}}>과목별 실모</div>
+            <h1 style={{margin:0,fontSize:"17px",fontWeight:"800",color:"#fff"}}>{sub.name} 회차 목록</h1>
+          </div>
+          <button onClick={onBack} style={{padding:"6px 12px",background:"rgba(255,255,255,.18)",
+            color:"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",cursor:"pointer",
+            fontFamily:"'Noto Sans KR',sans-serif"}}>← 과목선택</button>
+        </div>
+      </div>
+      <div style={{maxWidth:"720px",margin:"0 auto",padding:"20px 14px"}}>
+        {sortedRounds.length===0?(
+          <div style={{padding:"40px 20px",textAlign:"center",background:"#fff",borderRadius:"14px"}}>
+            <div style={{fontSize:"32px",marginBottom:"10px"}}>📋</div>
+            <div style={{fontSize:"14px",color:"#666",fontWeight:"600"}}>등록된 회차가 없습니다</div>
+            <div style={{fontSize:"11px",color:"#999",marginTop:"6px"}}>교사가 회차를 추가하면 응시할 수 있습니다</div>
+          </div>
+        ):(
+          <div style={{display:"grid",gap:"10px"}}>
+            {sortedRounds.map(round=>{
+              const mySub=findMySubmission(round.id);
+              const isPast=round.deadline && new Date(round.deadline)<new Date();
+              const isClosed=round.closed||isPast;
+              return(
+                <div key={round.id} style={{padding:"14px 16px",background:"#fff",borderRadius:"12px",
+                  boxShadow:"0 2px 10px rgba(0,0,0,.06)",borderLeft:`4px solid ${sub.color}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"10px",flexWrap:"wrap"}}>
+                    <div style={{flex:1,minWidth:"200px"}}>
+                      <div style={{fontSize:"10px",color:sub.color,fontWeight:"700",marginBottom:"3px"}}>{round.num}회차</div>
+                      <div style={{fontSize:"14px",fontWeight:"700",color:"#1a1a2e",marginBottom:"4px"}}>{round.title||`${round.num}회차`}</div>
+                      <div style={{fontSize:"11px",color:"#888"}}>
+                        {round.deadline?`마감: ${new Date(round.deadline).toLocaleString("ko-KR",{month:"numeric",day:"numeric",hour:"numeric",minute:"numeric"})}`:"마감 미설정"}
+                      </div>
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:"5px",alignItems:"flex-end"}}>
+                      {mySub?(
+                        <>
+                          <div style={{padding:"3px 10px",background:"#dcfce7",color:"#166534",
+                            borderRadius:"5px",fontSize:"10px",fontWeight:"800"}}>제출완료</div>
+                          <div style={{fontSize:"11px",color:"#666",fontWeight:"600"}}>
+                            {mySub.absent?"미응시":`${mySub.raw}점 (${mySub.correct}/${mySub.keyed||20})`}
+                          </div>
+                        </>
+                      ):isClosed?(
+                        <div style={{padding:"3px 10px",background:"#fef3c7",color:"#92400e",
+                          borderRadius:"5px",fontSize:"10px",fontWeight:"800"}}>마감됨</div>
+                      ):(
+                        <button onClick={()=>onPickRound(round)} style={{padding:"7px 14px",
+                          background:sub.color,color:"#fff",border:"none",borderRadius:"7px",
+                          fontSize:"12px",fontWeight:"700",cursor:"pointer",
+                          fontFamily:"'Noto Sans KR',sans-serif"}}>응시하기</button>
+                      )}
+                      {mySub && !isClosed && (
+                        <button onClick={()=>onPickRound(round)} style={{padding:"4px 10px",
+                          background:"transparent",color:sub.color,border:`1px solid ${sub.color}`,
+                          borderRadius:"6px",fontSize:"10px",fontWeight:"700",cursor:"pointer",
+                          fontFamily:"'Noto Sans KR',sans-serif"}}>다시 응시</button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SilmoExamView({round, subject, student, onSubmit, onBack}){
+  const sub=SILMO_SUBJECTS.find(s=>s.code===subject);
+  const [answers,setAnswers]=useState({});
+  const [absent,setAbsent]=useState(false);
+  const [submitting,setSubmitting]=useState(false);
+  const total=20;
+  const answeredCount=Object.values(answers).filter(v=>v!=null).length;
+
+  const handleSelect=(n,v)=>{
+    if(absent) return;
+    setAnswers(p=>({...p,[n]:v===p[n]?null:v}));
+  };
+  const handleSubmit=async()=>{
+    setSubmitting(true);
+    try { await onSubmit(answers, absent); }
+    finally { setSubmitting(false); }
+  };
+
+  return(
+    <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
+      <div style={{background:sub.color,padding:"14px 18px",boxShadow:"0 2px 16px rgba(0,0,0,.2)",position:"sticky",top:0,zIndex:50}}>
+        <div style={{maxWidth:"720px",margin:"0 auto"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"7px",marginBottom:"6px"}}>
+            <div>
+              <div style={{fontSize:"10px",color:"rgba(255,255,255,.7)",fontWeight:"700"}}>{sub.name} · {round.num}회차</div>
+              <h1 style={{margin:0,fontSize:"15px",fontWeight:"800",color:"#fff"}}>{round.title||`${round.num}회차`}</h1>
+            </div>
+            <div style={{display:"flex",gap:"7px",alignItems:"center"}}>
+              <span style={{color:"#fff",fontSize:"11px",fontWeight:"700"}}>{student.name}</span>
+              <button onClick={onBack} style={{padding:"5px 11px",background:"rgba(255,255,255,.18)",
+                color:"#fff",border:"none",borderRadius:"6px",fontSize:"10px",fontWeight:"700",cursor:"pointer",
+                fontFamily:"'Noto Sans KR',sans-serif"}}>← 목록</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{maxWidth:"720px",margin:"0 auto",padding:"16px 14px"}}>
+        <div style={{background:"#fff",borderRadius:"12px",padding:"12px 16px",marginBottom:"12px",
+          display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:"7px",
+          boxShadow:"0 2px 10px rgba(0,0,0,.06)"}}>
+          <div>
+            <div style={{fontSize:"11px",color:"#666",fontWeight:"600"}}>답안 입력</div>
+            <div style={{fontSize:"13px",color:sub.color,fontWeight:"800"}}>{answeredCount} / {total} 마킹</div>
+          </div>
+          <label style={{display:"flex",alignItems:"center",gap:"6px",cursor:"pointer",fontSize:"12px",fontWeight:"700",color:absent?"#dc2626":"#666"}}>
+            <input type="checkbox" checked={absent} onChange={e=>{setAbsent(e.target.checked); if(e.target.checked) setAnswers({});}}/>
+            미응시
+          </label>
+        </div>
+        <div style={{background:"#fff",borderRadius:"14px",padding:"18px",
+          boxShadow:"0 2px 14px rgba(0,0,0,.08)",borderTop:`4px solid ${sub.color}`,opacity:absent?.5:1}}>
+          <OMRGrid count={20} answers={answers} onSelect={handleSelect}
+            color={sub.color} columns={2} disabled={absent}/>
+        </div>
+        <button onClick={handleSubmit} disabled={submitting} style={{
+          width:"100%",marginTop:"14px",padding:"14px",
+          background:`linear-gradient(135deg,${sub.color},${sub.color}aa)`,
+          color:"#fff",border:"none",borderRadius:"11px",fontSize:"14px",fontWeight:"800",
+          cursor:submitting?"default":"pointer",fontFamily:"'Noto Sans KR',sans-serif",
+          boxShadow:`0 4px 16px ${sub.color}55`,opacity:submitting?.7:1}}>
+          {submitting?"제출 중...":"📤 제출하기"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SilmoGradingView({round, subject, submission, onBack, onExit}){
+  const sub=SILMO_SUBJECTS.find(s=>s.code===subject);
+  if(!submission || submission.absent){
+    return(
+      <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif",
+        display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}}>
+        <div style={{maxWidth:"420px",width:"100%",background:"#fff",borderRadius:"14px",padding:"32px 24px",textAlign:"center",
+          boxShadow:"0 4px 20px rgba(0,0,0,.1)"}}>
+          <div style={{fontSize:"40px",marginBottom:"10px"}}>🚫</div>
+          <h2 style={{margin:0,fontSize:"18px",fontWeight:"800",color:"#666"}}>미응시 처리되었습니다</h2>
+          <button onClick={onBack} style={{marginTop:"20px",padding:"10px 24px",
+            background:sub.color,color:"#fff",border:"none",borderRadius:"8px",
+            fontSize:"12px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>← 목록으로</button>
+        </div>
+      </div>
+    );
+  }
+  const pct=submission.keyed?Math.round((submission.correct/submission.keyed)*100):0;
+  return(
+    <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
+      <div style={{background:sub.color,padding:"14px 18px",boxShadow:"0 2px 16px rgba(0,0,0,.2)"}}>
+        <div style={{maxWidth:"720px",margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <h1 style={{margin:0,fontSize:"15px",fontWeight:"800",color:"#fff"}}>
+            {sub.name} · {round.num}회차 결과
+          </h1>
+          <button onClick={onBack} style={{padding:"6px 12px",background:"rgba(255,255,255,.18)",
+            color:"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",cursor:"pointer",
+            fontFamily:"'Noto Sans KR',sans-serif"}}>← 목록</button>
+        </div>
+      </div>
+      <div style={{maxWidth:"720px",margin:"0 auto",padding:"20px 14px"}}>
+        <div style={{background:"#fff",borderRadius:"14px",padding:"24px",textAlign:"center",
+          boxShadow:"0 2px 14px rgba(0,0,0,.08)",borderTop:`4px solid ${sub.color}`}}>
+          <div style={{fontSize:"11px",color:"#888",fontWeight:"700",marginBottom:"6px"}}>점수</div>
+          <div style={{fontSize:"44px",fontWeight:"900",color:sub.color,marginBottom:"5px"}}>
+            {submission.raw}
+            <span style={{fontSize:"15px",color:"#aaa",marginLeft:"3px"}}>/ {sub.fullScore}</span>
+          </div>
+          <div style={{fontSize:"13px",color:"#666",fontWeight:"600"}}>
+            정답 {submission.correct} / {submission.keyed||20}개 ({pct}%)
+          </div>
+        </div>
+        <div style={{background:"#fff",borderRadius:"14px",padding:"18px",marginTop:"14px",
+          boxShadow:"0 2px 14px rgba(0,0,0,.08)"}}>
+          <div style={{fontSize:"13px",fontWeight:"800",color:"#1a1a2e",marginBottom:"10px"}}>📋 문항별 결과</div>
+          <OMRGrid count={20} answers={submission.answers||{}}
+            color={sub.color} columns={2}
+            answerKey={round.answerKey||{}} showResult={true}/>
+        </div>
+        <button onClick={onBack} style={{
+          width:"100%",marginTop:"14px",padding:"12px",
+          background:sub.color,color:"#fff",border:"none",borderRadius:"10px",
+          fontSize:"13px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>← 회차 목록</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Teacher Silmo Flow ────────────────────────────────────────────────────
+function TeacherSilmoFlow({silmoData, setSilmoData, onExit}){
+  const [step,setStep]=useState("subject");
+  const [subject,setSubject]=useState(null);
+  const [activeRound,setActiveRound]=useState(null);
+
+  const refresh=async()=>{
+    const sd=await stGet(SK_SILMO);
+    if(sd) setSilmoData(sd);
+  };
+
+  const addRound=async(title)=>{
+    const newRound={
+      id: genSilmoId(),
+      num: ((silmoData.rounds[subject])||[]).length+1,
+      title: title || `${((silmoData.rounds[subject])||[]).length+1}회차`,
+      answerKey:{}, scores:{}, deadline:"", closed:false,
+      createdAt:new Date().toISOString()
+    };
+    const nd={...silmoData, rounds:{...silmoData.rounds, [subject]:[...((silmoData.rounds[subject])||[]), newRound]}};
+    await stSet(SK_SILMO, nd);
+    setSilmoData(nd);
+  };
+
+  const deleteRound=async(roundId)=>{
+    const nd=JSON.parse(JSON.stringify(silmoData));
+    nd.rounds[subject]=((nd.rounds[subject])||[]).filter(r=>r.id!==roundId);
+    if(nd.submissions[roundId]) delete nd.submissions[roundId];
+    await stSet(SK_SILMO, nd);
+    setSilmoData(nd);
+  };
+
+  const saveRound=async(roundId, updates)=>{
+    const nd=JSON.parse(JSON.stringify(silmoData));
+    const idx=((nd.rounds[subject])||[]).findIndex(r=>r.id===roundId);
+    if(idx>=0){
+      nd.rounds[subject][idx]={...nd.rounds[subject][idx], ...updates};
+    }
+    await stSet(SK_SILMO, nd);
+    setSilmoData(nd);
+  };
+
+  const resetSubject=async()=>{
+    const nd=JSON.parse(JSON.stringify(silmoData));
+    const ids=((nd.rounds[subject])||[]).map(r=>r.id);
+    nd.rounds[subject]=[];
+    ids.forEach(id=>{ if(nd.submissions[id]) delete nd.submissions[id]; });
+    await stSet(SK_SILMO, nd);
+    setSilmoData(nd);
+  };
+
+  if(step==="subject") return <SilmoSubjectView role="teacher"
+    onPick={(s)=>{ if(!SILMO_SUBJECTS.find(x=>x.code===s).active) return; setSubject(s); setStep("rounds"); }}
+    onExit={onExit}/>;
+  if(step==="rounds") return <TeacherSilmoRoundsView subject={subject} silmoData={silmoData}
+    onAdd={addRound} onDelete={deleteRound} onSaveRound={saveRound} onResetAll={resetSubject}
+    onEditKey={(r)=>{ setActiveRound(r); setStep("key"); }}
+    onViewScores={(r)=>{ setActiveRound(r); setStep("scores"); }}
+    onViewCumul={()=>setStep("cumul")}
+    onBack={()=>{ setStep("subject"); setSubject(null); }}/>;
+  if(step==="key") return <TeacherSilmoKeyView round={activeRound} subject={subject}
+    onSave={async(updates)=>{ await saveRound(activeRound.id, updates); setStep("rounds"); }}
+    onBack={()=>setStep("rounds")}/>;
+  if(step==="scores") return <TeacherSilmoScoresView round={activeRound} subject={subject}
+    submissions={silmoData.submissions[activeRound.id]||[]}
+    onClear={async()=>{
+      const nd={...silmoData, submissions:{...silmoData.submissions,[activeRound.id]:[]}};
+      await stSet(SK_SILMO, nd); setSilmoData(nd);
+    }}
+    onBack={()=>setStep("rounds")}/>;
+  if(step==="cumul") return <TeacherSilmoCumulativeView subject={subject} silmoData={silmoData}
+    onBack={()=>setStep("rounds")}/>;
+  return null;
+}
+
+function TeacherSilmoRoundsView({subject, silmoData, onAdd, onDelete, onSaveRound, onResetAll,
+  onEditKey, onViewScores, onViewCumul, onBack}){
+  const sub=SILMO_SUBJECTS.find(s=>s.code===subject);
+  const rounds=((silmoData.rounds[subject])||[]).slice().sort((a,b)=>(b.num||0)-(a.num||0));
+  const [showAdd,setShowAdd]=useState(false);
+  const [newTitle,setNewTitle]=useState("");
+  const [confirmReset,setConfirmReset]=useState(false);
+  const [confirmDel,setConfirmDel]=useState(null);
+  const [editingDeadline,setEditingDeadline]=useState(null);
+
+  const handleAdd=async()=>{ await onAdd(newTitle.trim()); setNewTitle(""); setShowAdd(false); };
+
+  return(
+    <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
+      <div style={{background:"linear-gradient(135deg,#0a1828,#1a2540)",padding:"14px 18px",
+        boxShadow:"0 2px 16px rgba(0,0,0,.25)",position:"sticky",top:0,zIndex:50}}>
+        <div style={{maxWidth:"920px",margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"7px"}}>
+          <div>
+            <div style={{fontSize:"10px",color:"#88a2c8",letterSpacing:".12em",fontWeight:"700",marginBottom:"2px"}}>교사 · 과목별 실모 관리</div>
+            <h1 style={{margin:0,fontSize:"17px",fontWeight:"800",color:"#fff"}}>{sub.name} 회차 관리</h1>
+          </div>
+          <div style={{display:"flex",gap:"7px",flexWrap:"wrap"}}>
+            <button onClick={onViewCumul} style={{padding:"7px 12px",background:"rgba(255,255,255,.15)",
+              color:"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",cursor:"pointer",
+              fontFamily:"'Noto Sans KR',sans-serif"}}>📊 누적 점수표</button>
+            <button onClick={onBack} style={{padding:"7px 12px",background:"rgba(255,255,255,.15)",
+              color:"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",cursor:"pointer",
+              fontFamily:"'Noto Sans KR',sans-serif"}}>← 과목선택</button>
+          </div>
+        </div>
+      </div>
+      <div style={{maxWidth:"920px",margin:"0 auto",padding:"18px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px",flexWrap:"wrap",gap:"7px"}}>
+          <button onClick={()=>setShowAdd(true)} style={{padding:"9px 18px",
+            background:`linear-gradient(135deg,${sub.color},${sub.color}cc)`,color:"#fff",
+            border:"none",borderRadius:"9px",fontSize:"12px",fontWeight:"800",cursor:"pointer",
+            fontFamily:"'Noto Sans KR',sans-serif",boxShadow:`0 3px 12px ${sub.color}55`}}>
+            ➕ 새 회차 추가
+          </button>
+          <button onClick={()=>setConfirmReset(true)} style={{padding:"7px 12px",
+            background:"#fff",color:"#dc2626",border:"1.5px solid #fca5a5",borderRadius:"7px",
+            fontSize:"11px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>
+            🗑 {sub.name} 전체 초기화
+          </button>
+        </div>
+
+        {rounds.length===0?(
+          <div style={{padding:"40px 20px",textAlign:"center",background:"#fff",borderRadius:"12px"}}>
+            <div style={{fontSize:"32px",marginBottom:"10px"}}>📋</div>
+            <div style={{fontSize:"13px",color:"#666",fontWeight:"600"}}>등록된 회차가 없습니다</div>
+            <div style={{fontSize:"11px",color:"#999",marginTop:"6px"}}>+ 새 회차 추가 버튼으로 생성하세요</div>
+          </div>
+        ):(
+          <div style={{display:"grid",gap:"10px"}}>
+            {rounds.map(round=>{
+              const subs=silmoData.submissions[round.id]||[];
+              const keyedCount=Object.values(round.answerKey||{}).filter(v=>v!=null).length;
+              const isPast=round.deadline && new Date(round.deadline)<new Date();
+              return(
+                <div key={round.id} style={{padding:"14px 16px",background:"#fff",borderRadius:"12px",
+                  boxShadow:"0 2px 10px rgba(0,0,0,.06)",borderLeft:`4px solid ${sub.color}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"10px",flexWrap:"wrap"}}>
+                    <div style={{flex:1,minWidth:"200px"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap",marginBottom:"4px"}}>
+                        <span style={{fontSize:"11px",color:sub.color,fontWeight:"800",padding:"2px 8px",background:`${sub.color}15`,borderRadius:"5px"}}>
+                          {round.num}회차
+                        </span>
+                        {keyedCount>=20 && <span style={{fontSize:"10px",color:"#16a34a",fontWeight:"800"}}>✓ 정답입력완료</span>}
+                        {keyedCount<20 && keyedCount>0 && <span style={{fontSize:"10px",color:"#f59e0b",fontWeight:"700"}}>정답 {keyedCount}/20</span>}
+                        {keyedCount===0 && <span style={{fontSize:"10px",color:"#dc2626",fontWeight:"700"}}>정답 미입력</span>}
+                        <span style={{fontSize:"10px",color:"#888"}}>· 제출 {subs.length}명</span>
+                      </div>
+                      <div style={{fontSize:"14px",fontWeight:"700",color:"#1a1a2e",marginBottom:"6px"}}>{round.title||`${round.num}회차`}</div>
+                      <div style={{display:"flex",alignItems:"center",gap:"7px",flexWrap:"wrap"}}>
+                        {editingDeadline===round.id?(
+                          <>
+                            <input type="datetime-local" defaultValue={round.deadline||""}
+                              onBlur={async(e)=>{ await onSaveRound(round.id,{deadline:e.target.value}); setEditingDeadline(null); }}
+                              autoFocus style={{padding:"3px 7px",fontSize:"11px",border:"1px solid #ccc",borderRadius:"5px"}}/>
+                            <button onClick={()=>setEditingDeadline(null)} style={{padding:"3px 8px",fontSize:"10px",background:"#f0f0f0",border:"none",borderRadius:"5px",cursor:"pointer"}}>닫기</button>
+                          </>
+                        ):(
+                          <button onClick={()=>setEditingDeadline(round.id)} style={{padding:"3px 9px",
+                            background:isPast?"#fee2e2":"#f0f4ff",color:isPast?"#dc2626":"#475569",
+                            border:"none",borderRadius:"5px",fontSize:"10px",fontWeight:"600",cursor:"pointer",
+                            fontFamily:"'Noto Sans KR',sans-serif"}}>
+                            ⏰ {round.deadline?new Date(round.deadline).toLocaleString("ko-KR",{month:"numeric",day:"numeric",hour:"numeric",minute:"numeric"}):"마감 미설정"}
+                            {isPast&&" (지남)"}
+                          </button>
+                        )}
+                        <button onClick={async()=>{ await onSaveRound(round.id,{closed:!round.closed}); }} style={{padding:"3px 9px",
+                          background:round.closed?"#fee2e2":"#dcfce7",color:round.closed?"#dc2626":"#166534",
+                          border:"none",borderRadius:"5px",fontSize:"10px",fontWeight:"700",cursor:"pointer",
+                          fontFamily:"'Noto Sans KR',sans-serif"}}>
+                          {round.closed?"🔒 마감됨":"🔓 응시중"}
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
+                      <button onClick={()=>onEditKey(round)} style={{padding:"6px 11px",
+                        background:sub.color,color:"#fff",border:"none",borderRadius:"7px",
+                        fontSize:"11px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>
+                        🔑 정답·배점
+                      </button>
+                      <button onClick={()=>onViewScores(round)} style={{padding:"6px 11px",
+                        background:"#1a3a6b",color:"#fff",border:"none",borderRadius:"7px",
+                        fontSize:"11px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>
+                        📊 점수보기
+                      </button>
+                      <button onClick={()=>setConfirmDel(round)} style={{padding:"6px 11px",
+                        background:"#fff",color:"#dc2626",border:"1.5px solid #fca5a5",borderRadius:"7px",
+                        fontSize:"11px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>
+                        삭제
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Add Modal */}
+      {showAdd && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,padding:"20px"}}>
+          <div style={{background:"#fff",borderRadius:"14px",padding:"24px",maxWidth:"380px",width:"100%"}}>
+            <h2 style={{margin:"0 0 14px",fontSize:"16px",fontWeight:"800",color:"#1a1a2e"}}>새 회차 추가</h2>
+            <div style={{fontSize:"11px",color:"#666",marginBottom:"5px",fontWeight:"600"}}>제목 (선택)</div>
+            <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder={`예: ${rounds.length+1}회차 또는 임의 제목`}
+              style={{width:"100%",padding:"9px 12px",border:"1.5px solid #ccc",borderRadius:"8px",fontSize:"13px",
+                fontFamily:"'Noto Sans KR',sans-serif",outline:"none",boxSizing:"border-box"}} autoFocus/>
+            <div style={{fontSize:"10px",color:"#999",marginTop:"5px"}}>비워두면 "{rounds.length+1}회차"로 자동 설정됩니다</div>
+            <div style={{display:"flex",gap:"7px",marginTop:"18px"}}>
+              <button onClick={()=>{setShowAdd(false); setNewTitle("");}} style={{flex:1,padding:"10px",
+                background:"#f5f5f5",color:"#666",border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"700",cursor:"pointer",
+                fontFamily:"'Noto Sans KR',sans-serif"}}>취소</button>
+              <button onClick={handleAdd} style={{flex:2,padding:"10px",
+                background:sub.color,color:"#fff",border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"700",cursor:"pointer",
+                fontFamily:"'Noto Sans KR',sans-serif"}}>추가</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Reset */}
+      {confirmReset && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,padding:"20px"}}>
+          <div style={{background:"#fff",borderRadius:"14px",padding:"24px",maxWidth:"380px",width:"100%"}}>
+            <h2 style={{margin:"0 0 12px",fontSize:"16px",fontWeight:"800",color:"#dc2626"}}>⚠ 전체 초기화</h2>
+            <div style={{fontSize:"12px",color:"#444",lineHeight:1.6,marginBottom:"12px"}}>
+              <strong>{sub.name}</strong>의 모든 회차와 학생 제출 답안이 영구 삭제됩니다.<br/>
+              이 작업은 되돌릴 수 없습니다.
+            </div>
+            <div style={{display:"flex",gap:"7px"}}>
+              <button onClick={()=>setConfirmReset(false)} style={{flex:1,padding:"10px",background:"#f5f5f5",color:"#666",border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>취소</button>
+              <button onClick={async()=>{ await onResetAll(); setConfirmReset(false); }} style={{flex:2,padding:"10px",background:"#dc2626",color:"#fff",border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>네, 초기화</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Delete Round */}
+      {confirmDel && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,padding:"20px"}}>
+          <div style={{background:"#fff",borderRadius:"14px",padding:"24px",maxWidth:"380px",width:"100%"}}>
+            <h2 style={{margin:"0 0 12px",fontSize:"16px",fontWeight:"800",color:"#dc2626"}}>회차 삭제</h2>
+            <div style={{fontSize:"12px",color:"#444",lineHeight:1.6,marginBottom:"12px"}}>
+              <strong>{confirmDel.num}회차 · {confirmDel.title}</strong>과 해당 회차 제출 답안이 삭제됩니다.
+            </div>
+            <div style={{display:"flex",gap:"7px"}}>
+              <button onClick={()=>setConfirmDel(null)} style={{flex:1,padding:"10px",background:"#f5f5f5",color:"#666",border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>취소</button>
+              <button onClick={async()=>{ await onDelete(confirmDel.id); setConfirmDel(null); }} style={{flex:2,padding:"10px",background:"#dc2626",color:"#fff",border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>삭제</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeacherSilmoKeyView({round, subject, onSave, onBack}){
+  const sub=SILMO_SUBJECTS.find(s=>s.code===subject);
+  const [answers,setAnswers]=useState(round.answerKey||{});
+  const [scores,setScores]=useState(round.scores||{});
+  const [deadline,setDeadline]=useState(round.deadline||"");
+  const [closed,setClosed]=useState(!!round.closed);
+
+  const totalScore=(()=>{
+    let t=0;
+    for(let i=1;i<=20;i++){
+      const sc=scores[i];
+      t += (sc!=null && sc!=="") ? Number(sc) : 2.5;
+    }
+    return t;
+  })();
+
+  const handleSelect=(n,v)=>setAnswers(p=>({...p,[n]:v===p[n]?null:v}));
+  const handleScore=(n,v)=>setScores(p=>({...p,[n]:v}));
+  const handleSave=async()=>{
+    await onSave({answerKey:answers, scores, deadline, closed});
+  };
+
+  const answeredCount=Object.values(answers).filter(v=>v!=null).length;
+
+  return(
+    <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
+      <div style={{background:"linear-gradient(135deg,#0a1828,#1a2540)",padding:"13px 18px",
+        boxShadow:"0 2px 16px rgba(0,0,0,.25)",position:"sticky",top:0,zIndex:50}}>
+        <div style={{maxWidth:"720px",margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"7px"}}>
+          <div>
+            <div style={{fontSize:"10px",color:"#88a2c8",fontWeight:"700"}}>{sub.name} · {round.num}회차 정답 입력</div>
+            <h1 style={{margin:0,fontSize:"15px",fontWeight:"800",color:"#fff"}}>{round.title||`${round.num}회차`}</h1>
+          </div>
+          <div style={{display:"flex",gap:"7px"}}>
+            <button onClick={onBack} style={{padding:"7px 12px",background:"rgba(255,255,255,.15)",color:"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>← 회차목록</button>
+            <button onClick={handleSave} style={{padding:"7px 16px",background:"linear-gradient(135deg,#fcd34d,#f59e0b)",color:"#1a1a00",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"800",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif",boxShadow:"0 2px 8px rgba(245,158,11,.4)"}}>💾 저장</button>
+          </div>
+        </div>
+      </div>
+      <div style={{maxWidth:"720px",margin:"0 auto",padding:"16px 14px"}}>
+        <div style={{background:"#fff",borderRadius:"12px",padding:"12px 16px",marginBottom:"12px",
+          boxShadow:"0 2px 10px rgba(0,0,0,.06)"}}>
+          <div style={{display:"grid",gap:"10px",gridTemplateColumns:"1fr 1fr"}}>
+            <div>
+              <div style={{fontSize:"11px",color:"#666",fontWeight:"700",marginBottom:"4px"}}>제출 마감 시간</div>
+              <input type="datetime-local" value={deadline} onChange={e=>setDeadline(e.target.value)}
+                style={{width:"100%",padding:"7px 9px",border:"1.5px solid #ccc",borderRadius:"7px",fontSize:"12px",fontFamily:"'Noto Sans KR',sans-serif",outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:"11px",color:"#666",fontWeight:"700",marginBottom:"4px"}}>응시 상태</div>
+              <button onClick={()=>setClosed(c=>!c)} style={{padding:"7px 14px",
+                background:closed?"#fee2e2":"#dcfce7",color:closed?"#dc2626":"#166534",
+                border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",cursor:"pointer",
+                fontFamily:"'Noto Sans KR',sans-serif",width:"100%"}}>
+                {closed?"🔒 마감됨 (클릭하여 열기)":"🔓 응시중 (클릭하여 마감)"}
+              </button>
+            </div>
+          </div>
+        </div>
+        <div style={{background:"#fff",borderRadius:"14px",padding:"18px",
+          boxShadow:"0 2px 14px rgba(0,0,0,.08)",borderTop:`4px solid ${sub.color}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"12px",flexWrap:"wrap",gap:"7px"}}>
+            <div style={{fontSize:"14px",fontWeight:"800",color:sub.color}}>
+              정답·배점 입력 <span style={{fontSize:"11px",color:"#aaa",fontWeight:"600"}}>· {answeredCount}/20 입력</span>
+            </div>
+            <div style={{padding:"5px 12px",borderRadius:"7px",
+              background:totalScore===sub.fullScore?"#f0fff4":totalScore>sub.fullScore?"#fff0f0":"#fff8e8",
+              border:totalScore===sub.fullScore?"1.5px solid #86efac":totalScore>sub.fullScore?"1.5px solid #fca5a5":"1.5px solid #f0c060",
+              fontSize:"11px",fontWeight:"800",
+              color:totalScore===sub.fullScore?"#16a34a":totalScore>sub.fullScore?"#dc2626":"#7a5000"}}>
+              배점합계: {totalScore} / {sub.fullScore}점
+            </div>
+          </div>
+          <OMRGrid count={20} answers={answers} onSelect={handleSelect}
+            color={sub.color} columns={2}
+            scoreMode={true} scoresMap={scores} onScoreChange={handleScore}
+            subjectId="stam"/>
+        </div>
+        <button onClick={handleSave} style={{
+          width:"100%",marginTop:"14px",padding:"13px",
+          background:"linear-gradient(135deg,#0a1828,#1a2540)",color:"#fff",border:"none",borderRadius:"10px",
+          fontSize:"13px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>
+          💾 저장 후 회차목록
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TeacherSilmoScoresView({round, subject, submissions, onClear, onBack}){
+  const sub=SILMO_SUBJECTS.find(s=>s.code===subject);
+  const [sortMode,setSortMode]=useState("default");
+  const [confirmClear,setConfirmClear]=useState(false);
+
+  const compareNum=(a,b)=>{
+    const an=String(a||""), bn=String(b||"");
+    const ai=parseFloat(an), bi=parseFloat(bn);
+    if(!isNaN(ai)&&!isNaN(bi)) return ai-bi;
+    if(!isNaN(ai)) return -1; if(!isNaN(bi)) return 1;
+    return an.localeCompare(bn,"ko");
+  };
+  const sorted=[...submissions];
+  if(sortMode==="numAsc") sorted.sort((a,b)=>compareNum(a.num,b.num));
+  else if(sortMode==="numDesc") sorted.sort((a,b)=>compareNum(b.num,a.num));
+  else if(sortMode==="nameAsc") sorted.sort((a,b)=>(a.name||"").localeCompare(b.name||"","ko"));
+  else if(sortMode==="rawDesc") sorted.sort((a,b)=>(b.raw||0)-(a.raw||0));
+  else if(sortMode==="rawAsc")  sorted.sort((a,b)=>(a.raw||0)-(b.raw||0));
+
+  const handleDownload=()=>{
+    const headers=["번호","이름","수험번호","점수","정답수","총문항","제출일시","상태"];
+    const rows=[headers];
+    sorted.forEach((s,i)=>{
+      rows.push([
+        String(i+1), s.name||"", s.num||"",
+        s.absent?"-":String(s.raw||0),
+        s.absent?"-":String(s.correct||0),
+        String(s.keyed||20),
+        s.submittedAt?new Date(s.submittedAt).toLocaleString("ko-KR"):"",
+        s.absent?"미응시":"제출"
+      ]);
+    });
+    const fileName=`${sub.name}_${round.num}회차_${round.title||""}_${new Date().toISOString().slice(0,10)}.csv`;
+    downloadCSV(rows, fileName);
+  };
+
+  return(
+    <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
+      <div style={{background:"linear-gradient(135deg,#0a1828,#1a2540)",padding:"13px 18px",
+        boxShadow:"0 2px 16px rgba(0,0,0,.25)",position:"sticky",top:0,zIndex:50}}>
+        <div style={{maxWidth:"920px",margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"7px"}}>
+          <div>
+            <div style={{fontSize:"10px",color:"#88a2c8",fontWeight:"700"}}>{sub.name} · {round.num}회차 점수</div>
+            <h1 style={{margin:0,fontSize:"15px",fontWeight:"800",color:"#fff"}}>{round.title||`${round.num}회차`} · 제출 {submissions.length}명</h1>
+          </div>
+          <button onClick={onBack} style={{padding:"7px 12px",background:"rgba(255,255,255,.15)",color:"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>← 회차목록</button>
+        </div>
+      </div>
+      <div style={{maxWidth:"920px",margin:"0 auto",padding:"16px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"7px",marginBottom:"10px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"5px"}}>
+            <span style={{fontSize:"11px",color:"#666",fontWeight:"700"}}>정렬:</span>
+            <select value={sortMode} onChange={e=>setSortMode(e.target.value)}
+              style={{padding:"5px 10px",border:"1.5px solid #d0d0d0",borderRadius:"7px",fontSize:"11px",fontWeight:"600",fontFamily:"'Noto Sans KR',sans-serif",cursor:"pointer",outline:"none",background:"#fff"}}>
+              <option value="default">기본 (제출순)</option>
+              <option value="numAsc">수험번호 ↑</option>
+              <option value="numDesc">수험번호 ↓</option>
+              <option value="nameAsc">이름</option>
+              <option value="rawDesc">점수 ↓</option>
+              <option value="rawAsc">점수 ↑</option>
+            </select>
+          </div>
+          <div style={{display:"flex",gap:"7px"}}>
+            <button onClick={handleDownload} disabled={submissions.length===0} style={{padding:"7px 14px",
+              background:submissions.length===0?"#e0e0e0":"linear-gradient(135deg,#16a34a,#15803d)",
+              color:submissions.length===0?"#999":"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",
+              cursor:submissions.length===0?"default":"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>📥 엑셀 다운로드</button>
+            <button onClick={()=>setConfirmClear(true)} disabled={submissions.length===0} style={{padding:"7px 14px",
+              background:"#fff",color:"#dc2626",border:"1.5px solid #fca5a5",borderRadius:"7px",fontSize:"11px",fontWeight:"700",
+              cursor:submissions.length===0?"default":"pointer",fontFamily:"'Noto Sans KR',sans-serif",opacity:submissions.length===0?.5:1}}>🗑 제출내역 초기화</button>
+          </div>
+        </div>
+        {sorted.length===0?(
+          <div style={{padding:"40px 20px",textAlign:"center",background:"#fff",borderRadius:"12px"}}>
+            <div style={{fontSize:"32px",marginBottom:"10px"}}>📭</div>
+            <div style={{fontSize:"13px",color:"#666",fontWeight:"600"}}>제출 내역이 없습니다</div>
+          </div>
+        ):(
+          <div style={{background:"#fff",borderRadius:"12px",overflow:"hidden",boxShadow:"0 2px 10px rgba(0,0,0,.06)"}}>
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px"}}>
+                <thead><tr style={{background:`linear-gradient(90deg,${sub.color},${sub.color}cc)`}}>
+                  {["#","이름","수험번호","점수","정답","제출일시"].map(h=>(
+                    <th key={h} style={{padding:"9px 8px",color:"#fff",fontWeight:"800",fontSize:"11px",textAlign:"left"}}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {sorted.map((s,i)=>(
+                    <tr key={i} style={{borderBottom:"1px solid #f0f0f0",background:s.absent?"#fafafa":"#fff"}}>
+                      <td style={{padding:"8px",color:"#888",fontWeight:"600"}}>{i+1}</td>
+                      <td style={{padding:"8px",fontWeight:"700",color:"#1a1a2e"}}>{s.name||"-"}</td>
+                      <td style={{padding:"8px",color:"#666",fontWeight:"600"}}>{s.num||"-"}</td>
+                      <td style={{padding:"8px",fontWeight:"800",color:s.absent?"#999":sub.color,fontSize:"13px"}}>
+                        {s.absent?"미응시":`${s.raw}/${sub.fullScore}`}
+                      </td>
+                      <td style={{padding:"8px",color:"#666",fontWeight:"600"}}>
+                        {s.absent?"-":`${s.correct}/${s.keyed||20}`}
+                      </td>
+                      <td style={{padding:"8px",color:"#999",fontSize:"10px"}}>
+                        {s.submittedAt?new Date(s.submittedAt).toLocaleString("ko-KR",{month:"numeric",day:"numeric",hour:"numeric",minute:"numeric"}):""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+      {confirmClear && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,padding:"20px"}}>
+          <div style={{background:"#fff",borderRadius:"14px",padding:"24px",maxWidth:"380px",width:"100%"}}>
+            <h2 style={{margin:"0 0 12px",fontSize:"16px",fontWeight:"800",color:"#dc2626"}}>제출내역 초기화</h2>
+            <div style={{fontSize:"12px",color:"#444",lineHeight:1.6,marginBottom:"12px"}}>이 회차의 모든 학생 제출 답안이 삭제됩니다. (정답·배점은 유지)</div>
+            <div style={{display:"flex",gap:"7px"}}>
+              <button onClick={()=>setConfirmClear(false)} style={{flex:1,padding:"10px",background:"#f5f5f5",color:"#666",border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>취소</button>
+              <button onClick={async()=>{ await onClear(); setConfirmClear(false); }} style={{flex:2,padding:"10px",background:"#dc2626",color:"#fff",border:"none",borderRadius:"8px",fontSize:"12px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>네, 초기화</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeacherSilmoCumulativeView({subject, silmoData, onBack}){
+  const sub=SILMO_SUBJECTS.find(s=>s.code===subject);
+  const rounds=((silmoData.rounds[subject])||[]).slice().sort((a,b)=>(a.num||0)-(b.num||0));
+  const [sortMode,setSortMode]=useState("totalDesc");
+
+  // Build {studentKey: {name, num, perRound: {roundId: raw}, total, attempts}}
+  const studentMap={};
+  rounds.forEach(r=>{
+    (silmoData.submissions[r.id]||[]).forEach(sub=>{
+      const k=(sub.name||"")+"|"+(sub.num||"");
+      if(!studentMap[k]) studentMap[k]={name:sub.name,num:sub.num,perRound:{},total:0,attempts:0,absents:0};
+      const m=studentMap[k];
+      m.perRound[r.id]={raw:sub.raw,absent:sub.absent};
+      if(!sub.absent){ m.total += Number(sub.raw||0); m.attempts++; }
+      else m.absents++;
+    });
+  });
+  let students=Object.values(studentMap).map(m=>({
+    ...m,
+    avg: m.attempts>0 ? Math.round((m.total/m.attempts)*10)/10 : 0
+  }));
+
+  const compareNum=(a,b)=>{
+    const an=String(a||""), bn=String(b||"");
+    const ai=parseFloat(an), bi=parseFloat(bn);
+    if(!isNaN(ai)&&!isNaN(bi)) return ai-bi;
+    if(!isNaN(ai)) return -1; if(!isNaN(bi)) return 1;
+    return an.localeCompare(bn,"ko");
+  };
+  if(sortMode==="numAsc") students.sort((a,b)=>compareNum(a.num,b.num));
+  else if(sortMode==="numDesc") students.sort((a,b)=>compareNum(b.num,a.num));
+  else if(sortMode==="nameAsc") students.sort((a,b)=>(a.name||"").localeCompare(b.name||"","ko"));
+  else if(sortMode==="totalDesc") students.sort((a,b)=>b.total-a.total);
+  else if(sortMode==="totalAsc") students.sort((a,b)=>a.total-b.total);
+  else if(sortMode==="avgDesc") students.sort((a,b)=>b.avg-a.avg);
+
+  const handleDownload=()=>{
+    const headers=["#","이름","수험번호",...rounds.map(r=>`${r.num}회차`),"응시횟수","합계","평균"];
+    const rows=[headers];
+    students.forEach((s,i)=>{
+      const row=[String(i+1),s.name||"",s.num||""];
+      rounds.forEach(r=>{
+        const p=s.perRound[r.id];
+        row.push(p?(p.absent?"미응시":String(p.raw)):"");
+      });
+      row.push(String(s.attempts));
+      row.push(String(s.total));
+      row.push(String(s.avg));
+      rows.push(row);
+    });
+    downloadCSV(rows,`${sub.name}_누적점수_${new Date().toISOString().slice(0,10)}.csv`);
+  };
+
+  return(
+    <div style={{minHeight:"100vh",background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
+      <div style={{background:"linear-gradient(135deg,#0a1828,#1a2540)",padding:"13px 18px",boxShadow:"0 2px 16px rgba(0,0,0,.25)",position:"sticky",top:0,zIndex:50}}>
+        <div style={{maxWidth:"1100px",margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"7px"}}>
+          <div>
+            <div style={{fontSize:"10px",color:"#88a2c8",fontWeight:"700"}}>{sub.name} · 누적 점수표</div>
+            <h1 style={{margin:0,fontSize:"15px",fontWeight:"800",color:"#fff"}}>전체 {rounds.length}회차 · {students.length}명</h1>
+          </div>
+          <button onClick={onBack} style={{padding:"7px 12px",background:"rgba(255,255,255,.15)",color:"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>← 회차목록</button>
+        </div>
+      </div>
+      <div style={{maxWidth:"1100px",margin:"0 auto",padding:"16px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"7px",marginBottom:"10px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"5px"}}>
+            <span style={{fontSize:"11px",color:"#666",fontWeight:"700"}}>정렬:</span>
+            <select value={sortMode} onChange={e=>setSortMode(e.target.value)}
+              style={{padding:"5px 10px",border:"1.5px solid #d0d0d0",borderRadius:"7px",fontSize:"11px",fontWeight:"600",fontFamily:"'Noto Sans KR',sans-serif",cursor:"pointer",outline:"none",background:"#fff"}}>
+              <option value="totalDesc">합계 ↓</option>
+              <option value="totalAsc">합계 ↑</option>
+              <option value="avgDesc">평균 ↓</option>
+              <option value="numAsc">수험번호 ↑</option>
+              <option value="numDesc">수험번호 ↓</option>
+              <option value="nameAsc">이름</option>
+            </select>
+          </div>
+          <button onClick={handleDownload} disabled={students.length===0} style={{padding:"7px 14px",
+            background:students.length===0?"#e0e0e0":"linear-gradient(135deg,#16a34a,#15803d)",color:students.length===0?"#999":"#fff",border:"none",borderRadius:"7px",fontSize:"11px",fontWeight:"700",cursor:students.length===0?"default":"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>📥 누적 점수 엑셀 다운로드</button>
+        </div>
+        {students.length===0?(
+          <div style={{padding:"40px 20px",textAlign:"center",background:"#fff",borderRadius:"12px"}}>
+            <div style={{fontSize:"32px",marginBottom:"10px"}}>📊</div>
+            <div style={{fontSize:"13px",color:"#666",fontWeight:"600"}}>아직 누적된 점수가 없습니다</div>
+          </div>
+        ):(
+          <div style={{background:"#fff",borderRadius:"12px",overflow:"hidden",boxShadow:"0 2px 10px rgba(0,0,0,.06)"}}>
+            <div style={{overflowX:"auto"}}>
+              <table style={{minWidth:"100%",borderCollapse:"collapse",fontSize:"11px",whiteSpace:"nowrap"}}>
+                <thead><tr style={{background:`linear-gradient(90deg,${sub.color},${sub.color}cc)`}}>
+                  <th style={{padding:"9px 8px",color:"#fff",fontWeight:"800",fontSize:"10px",textAlign:"left",position:"sticky",left:0,background:sub.color}}>#</th>
+                  <th style={{padding:"9px 8px",color:"#fff",fontWeight:"800",fontSize:"10px",textAlign:"left",position:"sticky",left:"30px",background:sub.color}}>이름</th>
+                  <th style={{padding:"9px 8px",color:"#fff",fontWeight:"800",fontSize:"10px",textAlign:"left"}}>수험번호</th>
+                  {rounds.map(r=>(
+                    <th key={r.id} style={{padding:"9px 8px",color:"#fff",fontWeight:"800",fontSize:"10px",textAlign:"center"}}>
+                      {r.num}회
+                    </th>
+                  ))}
+                  <th style={{padding:"9px 8px",color:"#fff",fontWeight:"800",fontSize:"10px",textAlign:"center",background:"rgba(0,0,0,.15)"}}>응시</th>
+                  <th style={{padding:"9px 8px",color:"#fff",fontWeight:"800",fontSize:"10px",textAlign:"center",background:"rgba(0,0,0,.15)"}}>합계</th>
+                  <th style={{padding:"9px 8px",color:"#fff",fontWeight:"800",fontSize:"10px",textAlign:"center",background:"rgba(0,0,0,.15)"}}>평균</th>
+                </tr></thead>
+                <tbody>
+                  {students.map((s,i)=>(
+                    <tr key={i} style={{borderBottom:"1px solid #f0f0f0"}}>
+                      <td style={{padding:"7px 8px",color:"#888",fontWeight:"600",position:"sticky",left:0,background:"#fff"}}>{i+1}</td>
+                      <td style={{padding:"7px 8px",fontWeight:"700",color:"#1a1a2e",position:"sticky",left:"30px",background:"#fff"}}>{s.name||"-"}</td>
+                      <td style={{padding:"7px 8px",color:"#666",fontWeight:"600"}}>{s.num||"-"}</td>
+                      {rounds.map(r=>{
+                        const p=s.perRound[r.id];
+                        return <td key={r.id} style={{padding:"7px 8px",textAlign:"center",color:p?(p.absent?"#999":sub.color):"#ddd",fontWeight:p?"700":"400"}}>
+                          {p?(p.absent?"-":p.raw):"·"}
+                        </td>;
+                      })}
+                      <td style={{padding:"7px 8px",textAlign:"center",color:"#666",fontWeight:"600",background:"#fafafa"}}>{s.attempts}</td>
+                      <td style={{padding:"7px 8px",textAlign:"center",fontWeight:"800",color:sub.color,background:"#fafafa",fontSize:"12px"}}>{s.total}</td>
+                      <td style={{padding:"7px 8px",textAlign:"center",fontWeight:"700",color:"#444",background:"#fafafa"}}>{s.avg}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 export default function App(){
   const [screen,setScreen]=useState("student");
   const [storedPw,setStoredPw]=useState(null);
@@ -1986,6 +3009,7 @@ export default function App(){
   const [answerKey,setAnswerKey]=useState(emptyKey());
   const [answerScores,setAnswerScores]=useState(emptyScores());
   const [deadlines,setDeadlines]=useState(emptyDL());
+  const [silmoData,setSilmoData]=useState(emptySilmo());
   const [gradingTarget,setGradingTarget]=useState(null);
   const [loading,setLoading]=useState(true);
 
@@ -2001,6 +3025,8 @@ export default function App(){
       if(key) setAnswerKey(key.answers||emptyKey());
       if(scr) setAnswerScores(scr);
       if(dl)  setDeadlines({...emptyDL(),...dl});
+      const sd=await stGet(SK_SILMO);
+      if(sd) setSilmoData(sd);
       setLoading(false);
     })();
   },[]);
@@ -2038,9 +3064,19 @@ export default function App(){
     <>
       <div style={{minHeight:"100vh",background:"#eef1f7"}}/>
       <PasswordModal storedPw={storedPw}
-        onSuccess={()=>{refreshStudents();setScreen("teacher_dashboard");}}
+        onSuccess={()=>{refreshStudents();setScreen("teacher_mode_select");}}
         onCancel={()=>setScreen("student")}/>
     </>
+  );
+  if(screen==="teacher_mode_select") return(
+    <ModeSelect role="teacher" title="교사 모드 선택" subtitle="관리할 시험 버전을 선택하세요"
+      onRegular={()=>setScreen("teacher_dashboard")}
+      onSilmo={()=>setScreen("teacher_silmo")}
+      onLogout={()=>setScreen("student")}/>
+  );
+  if(screen==="teacher_silmo") return(
+    <TeacherSilmoFlow silmoData={silmoData} setSilmoData={setSilmoData}
+      onExit={()=>setScreen("teacher_mode_select")}/>
   );
   if(screen==="teacher_dashboard") return(
     <TeacherDashboard students={students} deadlines={deadlines}
@@ -2066,6 +3102,8 @@ export default function App(){
   return(
     <StudentView deadlines={deadlines}
       onTeacherLogin={()=>setScreen("teacher_auth")}
-      onRefreshDeadlines={refreshDeadlines}/>
+      onRefreshDeadlines={refreshDeadlines}
+      silmoData={silmoData}
+      setSilmoData={setSilmoData}/>
   );
 }

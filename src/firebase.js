@@ -8,12 +8,12 @@ import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCDSOrKDFQxCLF4jByt6109988Ralklg4I",
-  authDomain: "omr-app-d4c69.firebaseapp.com",
-  projectId: "omr-app-d4c69",
-  storageBucket: "omr-app-d4c69.firebasestorage.app",
-  messagingSenderId: "517256460299",
-  appId: "1:517256460299:web:b6580e21191b58479d6f0e"
+  apiKey: "YOUR_API_KEY_HERE",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
 };
 
 const app = initializeApp(firebaseConfig);
