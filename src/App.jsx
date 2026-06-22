@@ -401,11 +401,11 @@ function PasswordModal({onSuccess,onCancel,storedPw}){
 }
 
 // ── Student View ───────────────────────────────────────────────────────────
-function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines, silmoData, setSilmoData}) {
+function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines, silmoData, setSilmoData, initialMode}) {
   const [name, setName] = useState("");
   const [num, setNum] = useState("");
   const [identified, setIdentified] = useState(false);
-  const [examMode, setExamMode] = useState(null);  // null | "regular" | "silmo"
+  const [examMode, setExamMode] = useState(initialMode || "regular");
   const [nameErr, setNameErr] = useState(false);
   const [errMsg, setErrMsg] = useState("");
 
@@ -536,19 +536,6 @@ function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines, silmoData, 
   const totalDone = SUBJECTS.filter(s => submitted[s.id]).length;
   const allSubmitted = totalDone === SUBJECTS.length;
 
-  // ── Mode Select (after login, before exam) ──
-  if (!examMode) {
-    return (
-      <ModeSelect
-        role="student"
-        title={`반갑습니다, ${name.trim()} 학생`}
-        subtitle="응시할 시험 버전을 선택하세요"
-        onRegular={()=>setExamMode("regular")}
-        onSilmo={()=>setExamMode("silmo")}
-        onLogout={()=>{ setIdentified(false); setExamMode(null); }}/>
-    );
-  }
-
   // ── Silmo Flow ──
   if (examMode === "silmo") {
     return (
@@ -556,7 +543,7 @@ function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines, silmoData, 
         studentInfo={{name: name.trim(), num: num.trim()}}
         silmoData={silmoData}
         setSilmoData={setSilmoData}
-        onExit={()=>setExamMode(null)}/>
+        onExit={()=>onTeacherLogin()}/>
     );
   }
 
@@ -3003,7 +2990,8 @@ function TeacherSilmoCumulativeView({subject, silmoData, onBack}){
 
 
 export default function App(){
-  const [screen,setScreen]=useState("student");
+  const [screen,setScreen]=useState("role_select");
+  const [pendingMode,setPendingMode]=useState("regular");
   const [storedPw,setStoredPw]=useState(null);
   const [students,setStudents]=useState([]);
   const [answerKey,setAnswerKey]=useState(emptyKey());
@@ -3063,8 +3051,15 @@ export default function App(){
   // Screens that don't need Firestore data - render immediately
   if(screen==="role_select") return(
     <RoleSelectScreen
-      onStudent={()=>setScreen("student")}
-      onTeacher={()=>setScreen("teacher_auth")}/>
+      onStudent={()=>setScreen("student_mode_select")}
+      onTeacher={()=>setScreen("teacher_mode_select")}/>
+  );
+
+  if(screen==="student_mode_select") return(
+    <ModeSelect role="student" title="학생 응시" subtitle="응시할 시험 버전을 선택하세요"
+      onRegular={()=>{setPendingMode("regular");setScreen("student");}}
+      onSilmo={()=>{setPendingMode("silmo");setScreen("student");}}
+      onLogout={()=>setScreen("role_select")}/>
   );
 
   // Loading state only blocks data-dependent screens (not the entry screens)
@@ -3082,14 +3077,14 @@ export default function App(){
     <>
       <div style={{minHeight:"100vh",background:"#eef1f7"}}/>
       <PasswordModal storedPw={storedPw}
-        onSuccess={()=>{refreshStudents();setScreen("teacher_mode_select");}}
-        onCancel={()=>setScreen("role_select")}/>
+        onSuccess={()=>{refreshStudents();setScreen(pendingMode==="silmo"?"teacher_silmo":"teacher_dashboard");}}
+        onCancel={()=>setScreen("teacher_mode_select")}/>
     </>
   );
   if(screen==="teacher_mode_select") return(
     <ModeSelect role="teacher" title="교사 모드 선택" subtitle="관리할 시험 버전을 선택하세요"
-      onRegular={()=>setScreen("teacher_dashboard")}
-      onSilmo={()=>setScreen("teacher_silmo")}
+      onRegular={()=>{setPendingMode("regular");setScreen("teacher_auth");}}
+      onSilmo={()=>{setPendingMode("silmo");setScreen("teacher_auth");}}
       onLogout={()=>setScreen("role_select")}/>
   );
   if(screen==="teacher_silmo") return(
@@ -3119,9 +3114,10 @@ export default function App(){
   );
   return(
     <StudentView deadlines={deadlines}
-      onTeacherLogin={()=>setScreen("role_select")}
+      onTeacherLogin={()=>setScreen("student_mode_select")}
       onRefreshDeadlines={refreshDeadlines}
       silmoData={silmoData}
-      setSilmoData={setSilmoData}/>
+      setSilmoData={setSilmoData}
+      initialMode={pendingMode}/>
   );
 }
