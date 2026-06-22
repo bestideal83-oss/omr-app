@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc } from "firebase/firestore/lite";
 import { db } from "./firebase";
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -614,10 +614,10 @@ function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines, silmoData, 
             border:"none",borderRadius:"12px",fontSize:"15px",fontWeight:"800",
             cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif",
             boxShadow:"0 4px 20px rgba(26,58,107,.4)"}}>시작하기 →</button>
-          <button onClick={onTeacherLogin} style={{width:"100%",marginTop:"10px",padding:"10px",
-            background:"transparent",color:"#bbb",border:"1.5px solid #e0e0e0",
+          <button onClick={onTeacherLogin} style={{width:"100%",marginTop:"10px",padding:"11px",
+            background:"transparent",color:"#999",border:"1.5px solid #ddd",
             borderRadius:"10px",fontSize:"12px",fontWeight:"600",cursor:"pointer",
-            fontFamily:"'Noto Sans KR',sans-serif"}}>🔑 교사 로그인</button>
+            fontFamily:"'Noto Sans KR',sans-serif"}}>← 시작화면으로</button>
         </div>
       </div>
     );
@@ -668,7 +668,7 @@ function StudentView({deadlines, onTeacherLogin, onRefreshDeadlines, silmoData, 
               background:"rgba(255,255,255,.08)",color:"#bbb",
               border:"1.5px solid rgba(255,255,255,.15)",borderRadius:"7px",
               fontSize:"11px",fontWeight:"600",cursor:"pointer",
-              fontFamily:"'Noto Sans KR',sans-serif"}}>🔑 교사</button>
+              fontFamily:"'Noto Sans KR',sans-serif"}}>← 처음으로</button>
           </div>
           <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
             {SUBJECTS.map(sub => {
@@ -3015,19 +3015,29 @@ export default function App(){
 
   useEffect(()=>{
     (async()=>{
-      const pw=await stGet(SK_PW);
-      const stu=await stGet(SK_STUDENTS);
-      const key=await stGet(SK_KEY);
-      const scr=await stGet(SK_SCORES);
-      const dl=await stGet(SK_DEADLINES);
-      if(pw) setStoredPw(pw);
-      if(stu) setStudents(stu);
-      if(key) setAnswerKey(key.answers||emptyKey());
-      if(scr) setAnswerScores(scr);
-      if(dl)  setDeadlines({...emptyDL(),...dl});
-      const sd=await stGet(SK_SILMO);
-      if(sd) setSilmoData(sd);
-      setLoading(false);
+      try {
+        // Parallel fetch - 6x faster than sequential
+        const [pw, stu, key, scr, dl, sd] = await Promise.all([
+          stGet(SK_PW),
+          stGet(SK_STUDENTS),
+          stGet(SK_KEY),
+          stGet(SK_SCORES),
+          stGet(SK_DEADLINES),
+          stGet(SK_SILMO),
+        ]);
+        if(pw) setStoredPw(pw);
+        if(stu) setStudents(stu);
+        if(key) setAnswerKey(key.answers||emptyKey());
+        if(scr) setAnswerScores(scr);
+        if(dl)  setDeadlines({...emptyDL(),...dl});
+        if(sd && typeof sd === "object" && sd.rounds && sd.submissions) {
+          setSilmoData(sd);
+        }
+      } catch(e) {
+        console.error("[App] Initial load error:", e);
+      } finally {
+        setLoading(false);
+      }
     })();
   },[]);
 
@@ -3050,6 +3060,14 @@ export default function App(){
   const handleUpdateDeadlines=(dl)=>setDeadlines(dl);
   const handleGrade=(stu)=>{setGradingTarget(stu);setScreen("grading");};
 
+  // Screens that don't need Firestore data - render immediately
+  if(screen==="role_select") return(
+    <RoleSelectScreen
+      onStudent={()=>setScreen("student")}
+      onTeacher={()=>setScreen("teacher_auth")}/>
+  );
+
+  // Loading state only blocks data-dependent screens (not the entry screens)
   if(loading) return(
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",
       background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
@@ -3065,14 +3083,14 @@ export default function App(){
       <div style={{minHeight:"100vh",background:"#eef1f7"}}/>
       <PasswordModal storedPw={storedPw}
         onSuccess={()=>{refreshStudents();setScreen("teacher_mode_select");}}
-        onCancel={()=>setScreen("student")}/>
+        onCancel={()=>setScreen("role_select")}/>
     </>
   );
   if(screen==="teacher_mode_select") return(
     <ModeSelect role="teacher" title="교사 모드 선택" subtitle="관리할 시험 버전을 선택하세요"
       onRegular={()=>setScreen("teacher_dashboard")}
       onSilmo={()=>setScreen("teacher_silmo")}
-      onLogout={()=>setScreen("student")}/>
+      onLogout={()=>setScreen("role_select")}/>
   );
   if(screen==="teacher_silmo") return(
     <TeacherSilmoFlow silmoData={silmoData} setSilmoData={setSilmoData}
@@ -3101,7 +3119,7 @@ export default function App(){
   );
   return(
     <StudentView deadlines={deadlines}
-      onTeacherLogin={()=>setScreen("teacher_auth")}
+      onTeacherLogin={()=>setScreen("role_select")}
       onRefreshDeadlines={refreshDeadlines}
       silmoData={silmoData}
       setSilmoData={setSilmoData}/>
