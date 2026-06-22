@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc } from "firebase/firestore/lite";
 import { db } from "./firebase";
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -3060,6 +3060,14 @@ export default function App(){
   const handleUpdateDeadlines=(dl)=>setDeadlines(dl);
   const handleGrade=(stu)=>{setGradingTarget(stu);setScreen("grading");};
 
+  // Screens that don't need Firestore data - render immediately
+  if(screen==="role_select") return(
+    <RoleSelectScreen
+      onStudent={()=>setScreen("student")}
+      onTeacher={()=>setScreen("teacher_auth")}/>
+  );
+
+  // Loading state only blocks data-dependent screens (not the entry screens)
   if(loading) return(
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",
       background:"#eef1f7",fontFamily:"'Noto Sans KR',sans-serif"}}>
@@ -3068,12 +3076,6 @@ export default function App(){
         <div style={{fontSize:"14px",fontWeight:"600"}}>불러오는 중...</div>
       </div>
     </div>
-  );
-
-  if(screen==="role_select") return(
-    <RoleSelectScreen
-      onStudent={()=>setScreen("student")}
-      onTeacher={()=>setScreen("teacher_auth")}/>
   );
 
   if(screen==="teacher_auth") return(
