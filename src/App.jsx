@@ -3015,19 +3015,26 @@ export default function App(){
 
   useEffect(()=>{
     (async()=>{
-      const pw=await stGet(SK_PW);
-      const stu=await stGet(SK_STUDENTS);
-      const key=await stGet(SK_KEY);
-      const scr=await stGet(SK_SCORES);
-      const dl=await stGet(SK_DEADLINES);
-      if(pw) setStoredPw(pw);
-      if(stu) setStudents(stu);
-      if(key) setAnswerKey(key.answers||emptyKey());
-      if(scr) setAnswerScores(scr);
-      if(dl)  setDeadlines({...emptyDL(),...dl});
-      const sd=await stGet(SK_SILMO);
-      if(sd) setSilmoData(sd);
-      setLoading(false);
+      try {
+        const pw=await stGet(SK_PW);
+        const stu=await stGet(SK_STUDENTS);
+        const key=await stGet(SK_KEY);
+        const scr=await stGet(SK_SCORES);
+        const dl=await stGet(SK_DEADLINES);
+        const sd=await stGet(SK_SILMO);
+        if(pw) setStoredPw(pw);
+        if(stu) setStudents(stu);
+        if(key) setAnswerKey(key.answers||emptyKey());
+        if(scr) setAnswerScores(scr);
+        if(dl)  setDeadlines({...emptyDL(),...dl});
+        if(sd && typeof sd === "object" && sd.rounds && sd.submissions) {
+          setSilmoData(sd);
+        }
+      } catch(e) {
+        console.error("[App] Initial load error:", e);
+      } finally {
+        setLoading(false);
+      }
     })();
   },[]);
 
